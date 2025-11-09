@@ -8,7 +8,7 @@ This is the realization and extension of [Project Hummingbird](https://github.co
   - https://github.com/zhuhai-esp/ESP32-C3-ABrobot-OLED (identifies the board as 'airm2m_core_esp32c3' )
   - https://emalliab.wordpress.com/2025/02/12/esp32-c3-0-42-oled/ (lots of details that the author of this article still struggled with worked out of the box for me)
 * Code is written in C / C++
-* I have used [pioarduino](https://github.com/pioarduino) (a fork of [platformio](https://platformio.org/)) as Visual Studio Code [VS Code] extension ([tutorial](https://randomnerdtutorials.com/vs-code-pioarduino-ide-esp32/)). It is important to note that for our hardware (ESP32-S3) we require the ESP32 Arduino Core (version 3). The [pioarduino](https://github.com/pioarduino) fork was initially created to support the newer ESP32-S3 processors - though by now they seem to also be supported by [platformio](https://platformio.org/) (not tested).
+* I have used [pioarduino](https://github.com/pioarduino) (a fork of [platformio](https://platformio.org/)) as Visual Studio Code [VS Code] extension ([tutorial](https://randomnerdtutorials.com/vs-code-pioarduino-ide-esp32/)). It is important to note that for our hardware (ESP32-C3) we require the ESP32 Arduino Core (version 3). The [pioarduino](https://github.com/pioarduino) fork was initially created to support the newer ESP32-C3 processors - though by now they seem to also be supported by [platformio](https://platformio.org/) (not tested).
 * To power the microcontroller independently of a computer, I used an old 5V / 850mA USB power adapter. ⚠️ Always ensure your power source is stable and within rated input range (6-21 V for the Arduino Nano ESP32).
 * We are switching a 110V AC 50Hz load using:
    * Safety fuse on the AC mainline
