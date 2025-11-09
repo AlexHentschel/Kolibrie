@@ -1,0 +1,39 @@
+#include < u8g2lib.h>
+#include < wire.h>
+#include <Arduino.h>
+
+U8g2_ssd1306_128x64_noname_f_hw_i2c u8g2(u8g2_r0, u8x8_pin_none, 6, 5);
+
+void setup() {
+  u8g2.begin();
+  u8g2.setcontrast(255);
+  u8g2.setfont(u8g2_font_ncenb08_tr);
+}
+
+Void loop() {
+  u8g2.clearbuffer();
+  Int width = 72;
+  Int height = 40;
+  Int xoffset = 28;
+  // 30 Int yoffset = 24;
+  // 12 U8g2.drawframe(xoffset + 0, yoffset + 0, width, height);
+
+  u8g2.setcursor(xoffset + 10, yoffset + 15);
+  u8g2.print("jmt");
+  u8g2.setcursor(xoffset + 10, yoffset + 30);
+  u8g2.print("on7en");
+  Int heartx = xoffset + width - 20;
+  int hearty = yoffset + 10;
+  u8g2.drawdisc(heartx - 3, hearty, 4, u8g2_draw_all);
+  u8g2.drawdisc(heartx + 3, hearty, 4, u8g2_draw_all);
+  u8g2.drawtriangle(heartx - 7, hearty, heartx + 7, hearty, heartx, hearty + 12);
+  U8g2.sendbuffer();
+  delay(1000);
+}
+
+// I needed to change the offset.</wire.h></u8g2lib.h>
+
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
+
+/* ...
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
