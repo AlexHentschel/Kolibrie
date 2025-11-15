@@ -18,18 +18,19 @@ const bool LEDExpiringToggler::HIGH_IS_ON = true;
 const bool LEDExpiringToggler::LOW_IS_ON = false;
 
 // constructor:
-LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, unsigned long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)
+LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)
     : pin(pin), lifetimeMs(lifetimeMs), toggleIntervalMs(toggleIntervalMs), lastTriggerObservedMilli(0), highIsOn(highIsOn) {
   pinMode(pin, OUTPUT);
   setLedOff();
 }
 
-void LEDExpiringToggler::toggleLED() {
+void LEDExpiringToggler::checkToggleLED() {
   if (expired) return;
   unsigned long currentMillis = millis();
   unsigned long sinceTrigger = currentMillis - lastTriggerObservedMilli;
 
-  if (sinceTrigger > lifetimeMs) { // lifetime expired
+  // note: negative lifetimeMs indicates infinite lifetime
+  if ((lifetimeMs >= 0) && (sinceTrigger > lifetimeMs)) {
     setLedOff();
     expired = true;
     return;
@@ -42,7 +43,7 @@ void LEDExpiringToggler::toggleLED() {
   // with HIGH on the always start with HIGH during the immediate toggleIntervalMs following a
   // trigger -- corresponding to counter value 0.
   unsigned long counter = sinceTrigger / toggleIntervalMs;
-  // modulo 2 is implemented below as bitwise AND with 1. We average the fact that the least
+  // modulo 2 is implemented below as bitwise AND with 1. We utilize that the least
   // significant bit of a binary number determines if it is even (0) or odd (1).
   if ((counter & 1) == 0) {
     setLedOn();

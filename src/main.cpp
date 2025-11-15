@@ -6,6 +6,7 @@
 #include <WiFiClientSecure.h>
 
 // custom utils
+#include "ConsoleUtils.h"
 #include "LedUtils.h"
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -52,6 +53,11 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
 LEDExpiringToggler *extLoadToggler = nullptr;
 
+/* Life-Signs
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+// prints life-signs to Serial console, unbounded runtime, print every 5000 milliseconds
+PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller alive");
+
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER INITIALIZATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
 /* FUNCTION PROTOTYPES
@@ -75,19 +81,20 @@ void setup() {
   blueToggler->trigger();
   while (true) {
     delay(20);
-    blueToggler->toggleLED();
+    blueToggler->checkToggleLED();
     if (blueToggler->isExpired()) break;
   }
 
   /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 999999999, 2000, LEDExpiringToggler::LOW_IS_ON); // blinks 1 times turning o1 second
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LEDExpiringToggler::LOW_IS_ON); // blinks 1 times turning o1 second
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, 999999999, 2000, LEDExpiringToggler::HIGH_IS_ON); // blinks 1 times turning o1 second
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LEDExpiringToggler::HIGH_IS_ON); // blinks 1 times turning o1 second
 
+  Serial.println("ESP32-C3 woken up!");
   blueToggler->trigger();
   extLoadToggler->trigger();
-  Serial.println("ESP32-C3 woken up!");
+  consolePrintLifeSign->trigger();
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -105,8 +112,9 @@ void loop() {
   u8g2.drawUTF8(54, text1_y0, "C");
   u8g2.sendBuffer(); // transfer internal memory to the display
 
-  blueToggler->toggleLED();
-  extLoadToggler->toggleLED();
+  blueToggler->checkToggleLED();
+  extLoadToggler->checkToggleLED();
+  consolePrintLifeSign->checkConsolePrint();
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */

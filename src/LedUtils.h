@@ -16,9 +16,9 @@ class LEDExpiringToggler {
   // don't rely on CPU frequency
 
   public:
-  LEDExpiringToggler(uint8_t pin, unsigned long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn); // explicit on/off logic
+  LEDExpiringToggler(uint8_t pin, long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn); // explicit on/off logic
 
-  void toggleLED();
+  void checkToggleLED();
   void trigger();
   void expire();
   bool isExpired();
@@ -32,7 +32,7 @@ class LEDExpiringToggler {
 
   // behavioral parameters are lifetime-constants (provided at construction)
   const uint8_t pin;
-  const unsigned long lifetimeMs;
+  const long lifetimeMs; // if negative, infinite lifetime
   const unsigned long toggleIntervalMs;
   const bool highIsOn;
 
