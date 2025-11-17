@@ -11,17 +11,19 @@ class LEDExpiringToggler {
   // To produce human-visible blinking, a `toggleIntervalMs` specifies the number of
   // milliseconds after which the output is alternated between on <-> off.
   //
-  // This is intended to run on the controller loop, consuming minimla resoueces.
-  // Results should be largely deterministic accross different controllers as we
-  // don't rely on CPU frequency
+  // This implementation is intended to run on the controller loop, consuming minimal
+  // resources. Results should be largely deterministic across different controllers as
+  // we don't rely on CPU frequency.
 
   public:
-  LEDExpiringToggler(uint8_t pin, long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn); // explicit on/off logic
+  LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn); // constructor
 
-  void checkToggleLED();
-  void trigger();
-  void expire();
-  bool isExpired();
+  void checkToggleLED(); // Loop function
+
+  // Lifecycle functions
+  void activate(long delayMs = 0); // activates the LED toggling (after optional delay [milliseconds])
+  void expire();                   // disables the LED toggling
+  bool isExpired();                // returns true if LED toggling is expired/disabled
 
   static const bool HIGH_IS_ON; // Indicates that GPIO state HIGH means LED is on
   static const bool LOW_IS_ON;  // Indicates that GPIO state LOW means LED is on (modus operandi for build-in LEDs in Arduino Nano EPS32)
@@ -32,11 +34,13 @@ class LEDExpiringToggler {
 
   // behavioral parameters are lifetime-constants (provided at construction)
   const uint8_t pin;
-  const long lifetimeMs; // if negative, infinite lifetime
-  const unsigned long toggleIntervalMs;
+  const int64_t lifetimeMs; // if negative, infinite lifetime
+  const int64_t toggleIntervalMs;
   const bool highIsOn;
 
   // dynamic state parameters
-  unsigned long lastTriggerObservedMilli;
+  int64_t lastActivationObservedMilli;
   bool expired;
+  bool stateIsOn;
+  int64_t nextToggleAtOrAfterMilli;
 };

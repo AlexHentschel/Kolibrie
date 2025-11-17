@@ -1,62 +1,80 @@
 #include "LedUtils.h"
+#include <cstdint>     // For int64_t
+#include <esp_timer.h> // For esp_timer_get_time()
 
 // CLASS LEDExpiringToggler
 //
 // This class toggles a GPIO Pin (uint8_t for ESP32 - style GPIOx) on and off
-// throughout a specified interval. Each time toggleLED() is called, the internal
-// time reference `lastTriggerObservedMilli` is set to the current time milliseconds.
-// Throughout the interval `intervalMs` thereafter, the LED is allowed to be toggled
+// throughout a specified interval. Each time `activate()` is called, the internal
+// time reference `lastActivationObservedMilli` is set to the current time milliseconds.
+// Throughout the interval `lifetimeMs` thereafter, the LED is allowed to be toggled
 // between on and off and when exceeding the interval, the LED is turned off.
 // To produce human-visible blinking, a `toggleIntervalMs` specifies the number of
 // milliseconds after which the output is alternated between on <-> off.
 //
-// This is intended to run on the controller loop, consuming minimal resources.
-// Results should be largely deterministic across different controllers as we
-// don't rely on CPU frequency
+// The constructor instantiates a _disabled_ toggler, which must be enabled by calling
+// `activate()` for blinking to start. Once activated, the LED will start the blinking
+// cycle in the ON state. After the specified `lifetimeMs` [milliseconds] has elapsed,
+// or `expired()` is called, the trigger deactivates and no longer returns true - until
+// `activate()` is called again.
+// Negative lifetime means that the trigger remains active indefinitely until `expire()`
+// is called.
+//
+// This implementation is intended to run on the controller loop, consuming minimal
+// resources. Results should be largely deterministic across different controllers as
+// we don't rely on CPU frequency.
 
 const bool LEDExpiringToggler::HIGH_IS_ON = true;
 const bool LEDExpiringToggler::LOW_IS_ON = false;
 
 // constructor:
-LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, long lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)
-    : pin(pin), lifetimeMs(lifetimeMs), toggleIntervalMs(toggleIntervalMs), lastTriggerObservedMilli(0), highIsOn(highIsOn) {
+LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)
+    : pin(pin), lifetimeMs(lifetimeMs), toggleIntervalMs(static_cast<int64_t>(toggleIntervalMs)), highIsOn(highIsOn) {
   pinMode(pin, OUTPUT);
   setLedOff();
 }
 
 void LEDExpiringToggler::checkToggleLED() {
   if (expired) return;
-  unsigned long currentMillis = millis();
-  unsigned long sinceTrigger = currentMillis - lastTriggerObservedMilli;
+  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
+  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
 
-  // note: negative lifetimeMs indicates infinite lifetime
-  if ((lifetimeMs >= 0) && (sinceTrigger > lifetimeMs)) {
+  // If the lifetime has expired, turn LED to off and mark as expired.
+  // note: negative lifetimeMs means no expiration
+  if ((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) {
     setLedOff();
     expired = true;
     return;
   }
 
-  // still active within lifetime:
-  // We divide `sinceTrigger` by toggleIntervalMs, which is essentially a zero-based counter of
-  // the elapsed toggle intervals. We always start with HIGH, on the zero value of the counter.
-  // Taking module 2 of the counter yields 0 for even or 1 for odd values. Per convention, we start
-  // with HIGH on the always start with HIGH during the immediate toggleIntervalMs following a
-  // trigger -- corresponding to counter value 0.
-  unsigned long counter = sinceTrigger / toggleIntervalMs;
-  // modulo 2 is implemented below as bitwise AND with 1. We utilize that the least
-  // significant bit of a binary number determines if it is even (0) or odd (1).
-  if ((counter & 1) == 0) {
-    setLedOn();
-  } else {
+  // within lifetime, but still before next toggle time: nothing to do
+  if (currentMillis < nextToggleAtOrAfterMilli) {
+    return;
+  }
+
+  // we reached or exceeded the next toggle time:
+  // • schedule next trigger time , skip missed intervals
+  // • invert LED state
+  nextToggleAtOrAfterMilli += toggleIntervalMs;
+  while (currentMillis >= nextToggleAtOrAfterMilli) {
+    nextToggleAtOrAfterMilli += toggleIntervalMs;
+  }
+  if (stateIsOn) {
     setLedOff();
+  } else {
+    setLedOn();
   }
 }
 
-void LEDExpiringToggler::trigger() {
-  if (lifetimeMs == 0) return; // no lifetime, so we don't need to trigger
-  lastTriggerObservedMilli = millis();
+void LEDExpiringToggler::activate(long delayMs /* = 0 */) {
+  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
+  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
   expired = false;
-  setLedOn();
+
+  // Calling activate() itself leaves the LED off, but activates the LED toggling cycle (after specified delay).
+  // The next call to `checkToggleLED()` (after `delayMs` milliseconds), will turn the LED on.
+  stateIsOn = false;
+  nextToggleAtOrAfterMilli = lastActivationObservedMilli;
 }
 
 void LEDExpiringToggler::expire() {
@@ -69,6 +87,7 @@ bool LEDExpiringToggler::isExpired() {
 }
 
 void LEDExpiringToggler::setLedOn() {
+  stateIsOn = true;
   if (highIsOn) {
     digitalWrite(pin, HIGH);
   } else {
@@ -77,6 +96,7 @@ void LEDExpiringToggler::setLedOn() {
 }
 
 void LEDExpiringToggler::setLedOff() {
+  stateIsOn = false;
   if (highIsOn) {
     digitalWrite(pin, LOW);
   } else {

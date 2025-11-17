@@ -1,4 +1,6 @@
 #include "ConsoleUtils.h"
+#include <cstdint>     // For int64_t
+#include <esp_timer.h> // For esp_timer_get_time()
 
 // CLASS PrintLifeSign
 //
@@ -6,34 +8,42 @@
 // It is intended to run on the controller loop, consuming minimal resources.
 
 // constructor:
-PrintLifeSign::PrintLifeSign(long lifetimeMs, unsigned long printIntervalMs, String message)
-    : lifetimeMs(lifetimeMs), printIntervalMs(printIntervalMs), lastTriggerObservedMilli(0), message(message) {
+PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned long printIntervalMs, String message)
+    : lifetimeMs(lifetimeMs), printIntervalMs(static_cast<int64_t>(printIntervalMs)), message(message) {
 }
 
 void PrintLifeSign::checkConsolePrint() {
   if (expired) return;
-  unsigned long currentMillis = millis();
-  unsigned long sinceTrigger = currentMillis - lastTriggerObservedMilli;
+  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
+  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
 
-  // note: negative lifetimeMs indicates infinite lifetime
-  if ((lifetimeMs >= 0) && (sinceTrigger > lifetimeMs)) {
+  // If the lifetime has expired, mark as expired and return (without printing).
+  // note: negative lifetimeMs means no expiration
+  if ((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) {
     expired = true;
     return;
   }
 
-  // still active within lifetime: check if we have reached or exceeded the next print time
-  if (currentMillis >= nextPrintAtOrAfterMilli) {
-    Serial.println(message);
-    nextPrintAtOrAfterMilli += printIntervalMs; // schedule next print time
+  // within lifetime, but still before next trigger time: nothing to do
+  if (currentMillis < nextPrintAtOrAfterMilli) {
+    return;
+  }
+
+  // if we have reached or exceeded the next trigger time, then print message and schedule next print
+  Serial.println(message);
+  nextPrintAtOrAfterMilli += printIntervalMs;        // schedule next print time
+  while (currentMillis >= nextPrintAtOrAfterMilli) { // skip missed intervals
+    nextPrintAtOrAfterMilli += printIntervalMs;
   }
 }
 
-void PrintLifeSign::trigger() {
-  if (lifetimeMs == 0) return; // no lifetime, so we don't need to trigger
-  lastTriggerObservedMilli = millis();
+void PrintLifeSign::activate(long delayMs /* = 0 */) {
+  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
+  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
   expired = false;
-  Serial.println(message);
-  nextPrintAtOrAfterMilli = lastTriggerObservedMilli + printIntervalMs;
+
+  // print on next call to `checkConsolePrint()` (after `delayMs` milliseconds)
+  nextPrintAtOrAfterMilli = lastActivationObservedMilli;
 }
 
 void PrintLifeSign::expire() { expired = true; }

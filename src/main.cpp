@@ -5,8 +5,13 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
-// custom utils
+// DS18B20 Temperature Sensor Libraries
+#include "DallasTemperature.h"
+#include "OneWire.h"
+
+// Custom utils
 #include "ConsoleUtils.h"
+#include "FrequentlyUtils.h"
 #include "LedUtils.h"
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -33,6 +38,14 @@ const unsigned int text1_y0 = 34, text2_y0 = 66;
 const char *text1 = "Bunny Happyness ";             // scroll this text from right to left
 const char *text2 = "The Cat Sleeps well tonight "; // scroll this text from right to left
 
+/* DS18B20 Temperature Sensor
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+#define TEMPERATURE_SENSOR_GPIO 2 // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
+OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
+DallasTemperature temperatureSensors(&temperatureSensorBus);
+
+FrequencyTrigger *readTriggerTemperature = nullptr;
+
 /* LEDs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 #define BLUE_LED_BUILTIN 8 // GPIO 8, Blue LED: LOW = on, HIGH = off
@@ -44,8 +57,8 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // EXT_LOAD_SWITCH defines the GPIO that is used to controll an external load attached.
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
-// power or not. Here, we use the Solid State Relay [SSR] H3MB-052D from Ingenex, which
-// connects its load pins on input HIGH
+// power or not. Here, the micro-controller's GPIO (3.3V) controls the external load, but
+// through an IRL530 Power Mosfet, supplying 5V trigger to a Solid-State-Relay switching AC mains.
 #define EXT_LOAD_SWITCH 1 // GPIO 1 controls the external load (through a Mosfet supplying 5V trigger to SSR switching AC mains)
 #define EXT_LOAD_ON HIGH
 #define EXT_LOAD_OFF LOW
@@ -66,8 +79,10 @@ PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller al
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
-void setup() {
+void setup() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   Serial.begin(115200);
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
   u8g2.setContrast(1);      // set contrast to maximum
@@ -77,8 +92,13 @@ void setup() {
   u8g2.setFont(u8g2_font_logisoso30_tf); // set the target font to calculate the pixel width
   u8g2.setFontMode(0);                   // enable transparent mode, which is faster
 
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  temperatureSensors.begin();                              // Start up the library
+  readTriggerTemperature = new FrequencyTrigger(-1, 2000); // read temperature every 2s, unbounded lifetime
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LEDExpiringToggler::LOW_IS_ON); // blinks 1 times turning o1 second
-  blueToggler->trigger();
+  blueToggler->activate();
   while (true) {
     delay(20);
     blueToggler->checkToggleLED();
@@ -91,17 +111,21 @@ void setup() {
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
   extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LEDExpiringToggler::HIGH_IS_ON); // blinks 1 times turning o1 second
 
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  blueToggler->activate();
+  extLoadToggler->activate();
+
+  consolePrintLifeSign->activate(293);
+  readTriggerTemperature->activate(421);
   Serial.println("ESP32-C3 woken up!");
-  blueToggler->trigger();
-  extLoadToggler->trigger();
-  consolePrintLifeSign->trigger();
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
-/* Frequency bound for controller reconnection attempts in Milliseconds
+/*
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 
-void loop() {
+void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
   u8g2.clearBuffer();                  // clear the internal memory
   u8g2.drawFrame(0, 0, width, height); // draw a frame around the border
   u8g2.setCursor(xOffset + 15, yOffset + 25);
@@ -112,6 +136,18 @@ void loop() {
   u8g2.drawUTF8(54, text1_y0, "C");
   u8g2.sendBuffer(); // transfer internal memory to the display
 
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  temperatureSensors.requestTemperatures();
+
+  if (readTriggerTemperature->checkTrigger()) {
+    Serial.print("Celsius temperature: ");
+    // We need to provide a "sensor index", as there can be more than one IC on the same bus. 0 refers to the first IC on the wire
+    Serial.print(temperatureSensors.getTempCByIndex(0));
+    Serial.print(" - Fahrenheit temperature: ");
+    Serial.println(temperatureSensors.getTempFByIndex(0));
+  }
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ lifecycle ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler->checkToggleLED();
   extLoadToggler->checkToggleLED();
   consolePrintLifeSign->checkConsolePrint();
