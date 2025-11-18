@@ -40,10 +40,13 @@ const char *text2 = "The Cat Sleeps well tonight "; // scroll this text from rig
 
 /* DS18B20 Temperature Sensor
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+typedef uint8_t address_DS18B20[8]; // type definition for DS18B20 address (8 bytes)
+
 #define TEMPERATURE_SENSOR_GPIO 2 // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
 OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 DallasTemperature temperatureSensors(&temperatureSensorBus);
 
+address_DS18B20 tempSensorDeviceAddress;
 FrequencyTrigger *readTriggerTemperature = nullptr;
 
 /* LEDs
@@ -75,12 +78,15 @@ PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller al
 
 /* FUNCTION PROTOTYPES
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
+uint8_t scanDevicesAddressesAndRememberLast(OneWire bus);
+void printDeviceAddress(const address_DS18B20 address);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 void setup() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   Serial.begin(115200);
+  delay(1000);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
@@ -93,11 +99,27 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   u8g2.setFontMode(0);                   // enable transparent mode, which is faster
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  Serial.print(F("Scanning for OneWire devices on GPIO pin "));
+  Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
+  uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus); // scan for connected DS18B20 devices
+  if (deviceCount != 1) {
+    while (true) {
+      Serial.print(F("Error: Expected exactly 1 DS18B20 device, but found "));
+      Serial.print(deviceCount, DEC);
+      Serial.println(F(" devices. Halting execution."));
+      delay(5000);
+    }
+  }
+  Serial.print(F("Assuming last detected device with address "));
+  printDeviceAddress(tempSensorDeviceAddress);
+  Serial.println(F(" to be the expected DS18B20 temperature sensor\n"));
+
   temperatureSensors.begin();                              // Start up the library
-  readTriggerTemperature = new FrequencyTrigger(-1, 2000); // read temperature every 2s, unbounded lifetime
+  readTriggerTemperature = new FrequencyTrigger(-1, 5000); // read temperature every 2s, unbounded lifetime
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LEDExpiringToggler::LOW_IS_ON); // blinks 1 times turning o1 second
+  // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LEDExpiringToggler::LOW_IS_ON);
   blueToggler->activate();
   while (true) {
     delay(20);
@@ -117,7 +139,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
   consolePrintLifeSign->activate(293);
   readTriggerTemperature->activate(421);
-  Serial.println("ESP32-C3 woken up!");
+  Serial.println(F("Done with setup. Kolibrie commencing operations!"));
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -157,3 +179,56 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
 
 /* ...
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+// Scan for devices on the OneWire bus.
+// • prints addresses of detected devices to Serial console
+// • writes the address of the LAST DEVICE found to `tempSensorDeviceAddress`
+// • returns number of devices found
+uint8_t scanDevicesAddressesAndRememberLast(OneWire bus) {
+  uint8_t count = 0;
+
+  if (bus.search(tempSensorDeviceAddress)) {
+    Serial.println(F("Devices with addresses found on OneWire bus:"));
+    do {
+      count++;
+      Serial.print("   ");
+      printDeviceAddress(tempSensorDeviceAddress);
+      Serial.println("");
+    } while (bus.search(tempSensorDeviceAddress));
+  } else {
+    Serial.println(F("No devices found on OneWire bus!"));
+  }
+
+  return count;
+}
+
+// function to print a OneWire device address in Hexadecimal format
+void printDeviceAddress(const address_DS18B20 address) {
+  for (uint8_t i = 0; i < 8; i++) {
+    if (address[i] < 0x10) Serial.print("0");
+    Serial.print(address[i], HEX);
+    if (i < 7) Serial.print(".");
+  }
+}
+
+// function to print a device address
+void printAddress(DeviceAddress deviceAddress) {
+  for (uint8_t i = 0; i < 8; i++) {
+    // zero pad the address if necessary
+    if (deviceAddress[i] < 16) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+  }
+}
+
+// function to print the temperature for a device
+void printTemperature(DeviceAddress deviceAddress) {
+  float tempC = temperatureSensors.getTempC(deviceAddress);
+  if (tempC == DEVICE_DISCONNECTED_C) {
+    Serial.println("Error: Could not read temperature data");
+    return;
+  }
+  Serial.print("Temp C: ");
+  Serial.print(tempC);
+  Serial.print(" Temp F: ");
+  Serial.print(DallasTemperature::toFahrenheit(tempC));
+}
