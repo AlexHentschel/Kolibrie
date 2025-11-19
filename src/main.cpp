@@ -40,13 +40,12 @@ const char *text2 = "The Cat Sleeps well tonight "; // scroll this text from rig
 
 /* DS18B20 Temperature Sensor
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-typedef uint8_t address_DS18B20[8]; // type definition for DS18B20 address (8 bytes)
-
 #define TEMPERATURE_SENSOR_GPIO 2 // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
+#define TEMPERATURE_PRECISION 10  // select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
 OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 DallasTemperature temperatureSensors(&temperatureSensorBus);
 
-address_DS18B20 tempSensorDeviceAddress;
+DeviceAddress tempSensorDeviceAddress; // type definition for DS18B20 address (8 bytes), provided by DallasTemperature library
 FrequencyTrigger *readTriggerTemperature = nullptr;
 
 /* LEDs
@@ -78,8 +77,12 @@ PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller al
 
 /* FUNCTION PROTOTYPES
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
-uint8_t scanDevicesAddressesAndRememberLast(OneWire bus);
-void printDeviceAddress(const address_DS18B20 address);
+uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
+void printDeviceAddress(const DeviceAddress address);
+void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress);
+
+void oledPrintTwoLines(U8G2 &display, const char *line1, const char *line2, uint8_t textHeight = 16);
+void oledScrollText(U8G2 &display, const char *text, uint8_t textHeight = 16, uint16_t scrollSpeedMs = 50);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -101,7 +104,8 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   Serial.print(F("Scanning for OneWire devices on GPIO pin "));
   Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
-  uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus); // scan for connected DS18B20 devices
+
+  uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress); // scan for connected DS18B20 devices
   if (deviceCount != 1) {
     while (true) {
       Serial.print(F("Error: Expected exactly 1 DS18B20 device, but found "));
@@ -114,7 +118,36 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   printDeviceAddress(tempSensorDeviceAddress);
   Serial.println(F(" to be the expected DS18B20 temperature sensor\n"));
 
-  temperatureSensors.begin();                              // Start up the library
+  temperatureSensors.begin(); // Initialise the sensor.
+
+  // Check that sensor is not reporting parasite power mode, which would not be expected and likely a symptom of some defect
+  if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
+    Serial.print(F("WARNING: DS18B20 temperature sensor "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println(F(" is reporting PARASITE POWER MODE. This is unexpected and may indicate a defect."));
+  }
+
+  // set the temperature accuracy
+  // Note on `skipGlobalBitResolutionCalculation` parameter:
+  // When skipGlobalBitResolutionCalculation is set to true, the function will only set the resolution for the targeted device and will not recalculate or update the overall (global) bit
+  // resolution for all devices on the bus. This can be useful for performance reasons or when you want to manage device resolutions individually without affecting the global setting.
+  // Conversely, if skipGlobalBitResolutionCalculation is false, the function will update the global bit resolution variable after successfully setting the device's resolution. It will als
+  // scan all devices to ensure the global bit resolution reflects the highest resolution among all connected sensors. This ensures consistency when reading temperatures from multiple devices.
+  temperatureSensors.setResolution(tempSensorDeviceAddress, TEMPERATURE_PRECISION);
+
+  // verify resolution setting:
+  uint8_t actualPrecision = temperatureSensors.getResolution(tempSensorDeviceAddress);
+  if (actualPrecision != TEMPERATURE_PRECISION) {
+    Serial.print(F("Error: Unable to set DS18B20 temperature sensor "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.print(F(" to desired precision of "));
+    Serial.print(TEMPERATURE_PRECISION, DEC);
+    Serial.println(F(" bits."));
+    Serial.println(F("Sensor reports precision of "));
+    Serial.print(actualPrecision, DEC);
+    Serial.println(F(" bits."));
+  }
+
   readTriggerTemperature = new FrequencyTrigger(-1, 5000); // read temperature every 2s, unbounded lifetime
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
@@ -140,6 +173,9 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   consolePrintLifeSign->activate(293);
   readTriggerTemperature->activate(421);
   Serial.println(F("Done with setup. Kolibrie commencing operations!"));
+
+  oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
+  delay(5000);
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -184,17 +220,18 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
 // • prints addresses of detected devices to Serial console
 // • writes the address of the LAST DEVICE found to `tempSensorDeviceAddress`
 // • returns number of devices found
-uint8_t scanDevicesAddressesAndRememberLast(OneWire bus) {
+uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut) {
   uint8_t count = 0;
 
-  if (bus.search(tempSensorDeviceAddress)) {
+  if (bus.search(addressOut)) {
     Serial.println(F("Devices with addresses found on OneWire bus:"));
     do {
       count++;
       Serial.print("   ");
-      printDeviceAddress(tempSensorDeviceAddress);
+      printDeviceAddress(addressOut);
       Serial.println("");
-    } while (bus.search(tempSensorDeviceAddress));
+      // addressOut always contains the last found address
+    } while (bus.search(addressOut));
   } else {
     Serial.println(F("No devices found on OneWire bus!"));
   }
@@ -203,7 +240,7 @@ uint8_t scanDevicesAddressesAndRememberLast(OneWire bus) {
 }
 
 // function to print a OneWire device address in Hexadecimal format
-void printDeviceAddress(const address_DS18B20 address) {
+void printDeviceAddress(const DeviceAddress address) {
   for (uint8_t i = 0; i < 8; i++) {
     if (address[i] < 0x10) Serial.print("0");
     Serial.print(address[i], HEX);
@@ -211,18 +248,9 @@ void printDeviceAddress(const address_DS18B20 address) {
   }
 }
 
-// function to print a device address
-void printAddress(DeviceAddress deviceAddress) {
-  for (uint8_t i = 0; i < 8; i++) {
-    // zero pad the address if necessary
-    if (deviceAddress[i] < 16) Serial.print("0");
-    Serial.print(deviceAddress[i], HEX);
-  }
-}
-
 // function to print the temperature for a device
-void printTemperature(DeviceAddress deviceAddress) {
-  float tempC = temperatureSensors.getTempC(deviceAddress);
+void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
+  float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
     Serial.println("Error: Could not read temperature data");
     return;
@@ -231,4 +259,136 @@ void printTemperature(DeviceAddress deviceAddress) {
   Serial.print(tempC);
   Serial.print(" Temp F: ");
   Serial.print(DallasTemperature::toFahrenheit(tempC));
+}
+
+// Service function: Print two lines of text on the OLED, left-aligned, with configurable text size
+// Supports text heights: 10, 12, 13, 14, 15, 18, 20.
+// Well readable values are sizes 16 and 20
+//
+// Examples:
+//   oledPrintTwoLines(u8g2, "10 Size: 1234567", "ABCDEFG", 10); delay(5000);
+//   oledPrintTwoLines(u8g2, "12 Size: 1234567", "ABCDEFG", 12); delay(5000);
+//   oledPrintTwoLines(u8g2, "13 Size: 1234567", "ABCDEFG", 13); delay(5000);
+//   oledPrintTwoLines(u8g2, "14 Size: 1234567", "ABCDEFG", 14); delay(5000);
+//   oledPrintTwoLines(u8g2, "15 Size: 1234567", "ABCDEFG", 15); delay(5000);
+//   oledPrintTwoLines(u8g2, "18 Size: 1234567", "ABCDEFG", 18); delay(5000);
+//   oledPrintTwoLines(u8g2, "22 Size: 1234567", "ABCDEFG", 22); delay(5000);
+//
+void oledPrintTwoLines(U8G2 &display, const char *line1, const char *line2, uint8_t textHeight /* = 16 */) {
+  display.clearBuffer();
+  uint8_t fontHeight = textHeight;
+  uint8_t yOffset = 2;
+  uint8_t yPad = 2;
+
+  // Choose a font based on the requested height, suitable for small screens
+  if (textHeight <= 10) {
+    display.setFont(u8g2_font_5x8_tf);
+    fontHeight = 10;
+    yOffset = 6;
+    yPad = 6;
+  } else if (textHeight <= 12) {
+    display.setFont(u8g2_font_6x12_tf);
+    fontHeight = 10;
+    yOffset = 5;
+    yPad = 5;
+  } else if (textHeight <= 13) {
+    display.setFont(u8g2_font_6x13_tf);
+    fontHeight = 10;
+    yOffset = 4;
+    yPad = 6;
+  } else if (textHeight <= 14) {
+    display.setFont(u8g2_font_7x13_tf);
+    fontHeight = 11;
+    yOffset = 3;
+    yPad = 7;
+  } else if (textHeight <= 15) {
+    display.setFont(u8g2_font_8x13_tf);
+    yOffset = 2;
+    yPad = 4;
+    fontHeight = 12;
+  } else if (textHeight <= 16) {
+    display.setFont(u8g2_font_9x15_tf);
+    yOffset = 1;
+    fontHeight = 13;
+  } else if (textHeight <= 18) {
+    display.setFont(u8g2_font_9x18_tf);
+    fontHeight = 14;
+    yOffset = 0;
+  } else {
+    display.setFont(u8g2_font_10x20_tf);
+    fontHeight = 15;
+    yPad = 2;
+    yOffset = 0;
+  }
+  // Print first line at top
+  display.drawStr(0, yOffset + fontHeight, line1);
+  // Print second line below
+  display.drawStr(0, yOffset + 2 * fontHeight + yPad, line2);
+  display.sendBuffer();
+}
+
+// Service function: Scroll a single line of text horizontally on the OLED, with configurable text height and speed.
+// The `scrollSpeedMs` is the delay between moving the text by 1 pixel (default: 50ms).
+//
+// Examples:
+//   oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
+void oledScrollText(U8G2 &display, const char *text, uint8_t textHeight /* = 16 */, uint16_t scrollSpeedMs /* = 50 */) {
+  // Font selection logic (unchanged)
+  uint8_t fontHeight = textHeight;
+  uint8_t yOffset = 2;
+  if (textHeight <= 10) {
+    display.setFont(u8g2_font_5x8_tf);
+    fontHeight = 10;
+    yOffset = 6;
+  } else if (textHeight <= 12) {
+    display.setFont(u8g2_font_6x12_tf);
+    fontHeight = 10;
+    yOffset = 5;
+  } else if (textHeight <= 13) {
+    display.setFont(u8g2_font_6x13_tf);
+    fontHeight = 10;
+    yOffset = 4;
+  } else if (textHeight <= 14) {
+    display.setFont(u8g2_font_7x13_tf);
+    fontHeight = 11;
+    yOffset = 3;
+  } else if (textHeight <= 15) {
+    display.setFont(u8g2_font_8x13_tf);
+    yOffset = 2;
+    fontHeight = 12;
+  } else if (textHeight <= 16) {
+    display.setFont(u8g2_font_9x15_tf);
+    yOffset = 1;
+    fontHeight = 13;
+  } else if (textHeight <= 18) {
+    display.setFont(u8g2_font_9x18_tf);
+    fontHeight = 14;
+    yOffset = 0;
+  } else {
+    display.setFont(u8g2_font_logisoso30_tr);
+    fontHeight = 30;
+    yOffset = 0;
+  }
+
+  display.setFontMode(1); // transparent mode for speed
+  uint8_t y = fontHeight + yOffset;
+  int textWidth = display.getUTF8Width(text);
+  int screenWidth = display.getDisplayWidth();
+
+  int offset = 0;
+  while (true) {
+    display.clearBuffer();
+    int x = offset;
+    // Draw text repeatedly for seamless loop
+    do {
+      display.drawUTF8(x, y, text);
+      x += textWidth;
+    } while (x < screenWidth);
+    display.sendBuffer();
+    offset--;
+    if (offset < -textWidth) offset = 0;
+    delay(scrollSpeedMs);
+    // Optionally break after one full scroll (uncomment below)
+    if (offset == 0) break;
+  }
 }
