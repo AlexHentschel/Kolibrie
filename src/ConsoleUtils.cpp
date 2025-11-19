@@ -9,8 +9,13 @@
 
 // constructor:
 PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned long printIntervalMs, String message)
-    : lifetimeMs(lifetimeMs), printIntervalMs(static_cast<int64_t>(printIntervalMs)), message(message) {
-}
+    : lifetimeMs(lifetimeMs),
+      printIntervalMs(static_cast<int64_t>(printIntervalMs)),
+      message(message),
+      lastActivationObservedMilli(0),
+      nextPrintAtOrAfterMilli(0),
+      expired(true) // start as expired/disabled
+{}
 
 void PrintLifeSign::checkConsolePrint() {
   if (expired) return;

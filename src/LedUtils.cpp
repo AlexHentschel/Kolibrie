@@ -29,65 +29,39 @@ const bool LEDExpiringToggler::LOW_IS_ON = false;
 
 // constructor:
 LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)
-    : pin(pin), lifetimeMs(lifetimeMs), toggleIntervalMs(static_cast<int64_t>(toggleIntervalMs)), highIsOn(highIsOn) {
+    : pin(pin),
+      highIsOn(highIsOn),
+      toggler(lifetimeMs, toggleIntervalMs) {
   pinMode(pin, OUTPUT);
   setLedOff();
 }
 
 void LEDExpiringToggler::checkToggleLED() {
-  if (expired) return;
-  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
-  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
+  if (!toggler.checkToggle()) return; // also false for
 
-  // If the lifetime has expired, turn LED to off and mark as expired.
-  // note: negative lifetimeMs means no expiration
-  if ((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) {
-    setLedOff();
-    expired = true;
-    return;
-  }
-
-  // within lifetime, but still before next toggle time: nothing to do
-  if (currentMillis < nextToggleAtOrAfterMilli) {
-    return;
-  }
-
-  // we reached or exceeded the next toggle time:
-  // • schedule next trigger time , skip missed intervals
-  // • invert LED state
-  nextToggleAtOrAfterMilli += toggleIntervalMs;
-  while (currentMillis >= nextToggleAtOrAfterMilli) {
-    nextToggleAtOrAfterMilli += toggleIntervalMs;
-  }
-  if (stateIsOn) {
-    setLedOff();
-  } else {
+  // state has changed, so query new state and set LED accordingly
+  if (toggler.isCurrentStateOn()) {
     setLedOn();
+  } else {
+    setLedOff();
   }
 }
 
 void LEDExpiringToggler::activate(long delayMs /* = 0 */) {
-  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
-  expired = false;
-
   // Calling activate() itself leaves the LED off, but activates the LED toggling cycle (after specified delay).
   // The next call to `checkToggleLED()` (after `delayMs` milliseconds), will turn the LED on.
-  stateIsOn = false;
-  nextToggleAtOrAfterMilli = lastActivationObservedMilli;
+  // This is exactly how the underlying FrequencyToggler works.
+  toggler.activate(delayMs);
 }
 
 void LEDExpiringToggler::expire() {
-  expired = true;
+  toggler.expire();
   setLedOff();
 }
 
-bool LEDExpiringToggler::isExpired() {
-  return expired;
-}
+bool LEDExpiringToggler::isExpired() { return toggler.isExpired(); }
 
 void LEDExpiringToggler::setLedOn() {
-  stateIsOn = true;
   if (highIsOn) {
     digitalWrite(pin, HIGH);
   } else {
@@ -96,7 +70,6 @@ void LEDExpiringToggler::setLedOn() {
 }
 
 void LEDExpiringToggler::setLedOff() {
-  stateIsOn = false;
   if (highIsOn) {
     digitalWrite(pin, LOW);
   } else {

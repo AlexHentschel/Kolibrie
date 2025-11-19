@@ -1,4 +1,5 @@
 #pragma once
+#include "FrequentlyUtils.h"
 #include <Arduino.h>
 
 class LEDExpiringToggler {
@@ -34,13 +35,8 @@ class LEDExpiringToggler {
 
   // behavioral parameters are lifetime-constants (provided at construction)
   const uint8_t pin;
-  const int64_t lifetimeMs; // if negative, infinite lifetime
-  const int64_t toggleIntervalMs;
   const bool highIsOn;
 
   // dynamic state parameters
-  int64_t lastActivationObservedMilli;
-  bool expired;
-  bool stateIsOn;
-  int64_t nextToggleAtOrAfterMilli;
+  FrequencyToggler toggler;
 };

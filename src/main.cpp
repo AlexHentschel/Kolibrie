@@ -55,7 +55,7 @@ FrequencyTrigger *readTriggerTemperature = nullptr;
 // LED Blinking patterns to indicate current state
 LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
 
-/* Controller Output for External Load -> GPIO
+/* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // EXT_LOAD_SWITCH defines the GPIO that is used to controll an external load attached.
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
@@ -67,6 +67,31 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
 
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
 LEDExpiringToggler *extLoadToggler = nullptr;
+
+// Toggler for blinking the "heating symbol" on the OLED screen when the external load is active
+// Char 'flash-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 20x20 pixels
+#define epd_bitmap_flash_width 20
+#define epd_bitmap_flash_height 20
+const unsigned char epd_bitmap_flash[] PROGMEM = {
+    0x00, 0x0E, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x07, 0x00, 0x80, 0x07, 0x00,
+    0xC0, 0x03, 0x00, 0xC0, 0x7F, 0x00, 0xE0, 0x3F, 0x00, 0x40, 0x3E, 0x00,
+    0x00, 0x1C, 0x00, 0x00, 0x1E, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x0E, 0x00,
+    0x40, 0x2F, 0x00, 0xE0, 0x3F, 0x00, 0xC0, 0x1F, 0x00, 0xC0, 0x0F, 0x00,
+    0xC0, 0x07, 0x00, 0x80, 0x03, 0x00, 0x80, 0x01, 0x00, 0x80, 0x00, 0x00};
+
+// Wify symbol for display on OLED screen when wifi internet connection is active
+// Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
+#define epd_bitmap_wifi_width 12
+#define epd_bitmap_wifi_height 12
+const unsigned char epd_bitmap_wifi[] PROGMEM = {
+    0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00,
+    0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E};
+
+// Array of all bitmaps for convenience. (Total bytes used to store images in PROGMEM = 96)
+const int epd_bitmap_allArray_LEN = 1;
+const unsigned char *epd_bitmap_allArray[1] = {epd_bitmap_flash};
+
+FrequencyToggler *extLoadOnDisplayBlinker = nullptr;
 
 /* Life-Signs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -149,6 +174,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   }
 
   readTriggerTemperature = new FrequencyTrigger(-1, 5000); // read temperature every 2s, unbounded lifetime
+  extLoadOnDisplayBlinker = new FrequencyToggler(-1, 500); // blinks every 500ms when activated
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
@@ -172,10 +198,11 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
   consolePrintLifeSign->activate(293);
   readTriggerTemperature->activate(421);
+  extLoadOnDisplayBlinker->activate(421);
   Serial.println(F("Done with setup. Kolibrie commencing operations!"));
 
-  oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
-  delay(5000);
+  // oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
+  // delay(5000);
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -184,14 +211,16 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
 void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
+  u8g2.setFont(u8g2_font_logisoso30_tf);
   u8g2.clearBuffer();                  // clear the internal memory
   u8g2.drawFrame(0, 0, width, height); // draw a frame around the border
-  u8g2.setCursor(xOffset + 15, yOffset + 25);
+  // u8g2.setCursor(xOffset + 15, yOffset + 25);
   // u8g2.printf("%dx%d", width, height);
-  u8g2.drawUTF8(0, text1_y0, "12"); // draw the scolling text
+  u8g2.drawUTF8(2, 34, "82"); // draw the scolling text
 
-  u8g2.drawUTF8(42, text1_y0 + 6, "°"); // draw the scolling text
-  u8g2.drawUTF8(54, text1_y0, "C");
+  u8g2.drawUTF8(42, 40, "°"); // draw the scolling text
+  u8g2.setFont(u8g2_font_logisoso18_tf);
+  u8g2.drawUTF8(54, 22, "C");
   u8g2.sendBuffer(); // transfer internal memory to the display
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
@@ -203,6 +232,33 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
     Serial.print(temperatureSensors.getTempCByIndex(0));
     Serial.print(" - Fahrenheit temperature: ");
     Serial.println(temperatureSensors.getTempFByIndex(0));
+  }
+
+  Serial.print("Toggler state: ");
+  Serial.println(extLoadOnDisplayBlinker->isCurrentStateOn());
+
+  if (extLoadOnDisplayBlinker->checkToggle()) {
+    // toggle the heating symbol on the OLED display
+    if (extLoadOnDisplayBlinker->isCurrentStateOn()) {
+      Serial.println(" toggle heating symbol ON display");
+      // u8g2.setFont(u8g2_font_open_iconic_embedded_2x_t);
+      // u8g2.drawUTF8(38, 35, "\x43"); // draw heating symbol
+      u8g2.setBitmapMode(1);
+      // u8g2.drawXBMP(37, 15, epd_bitmap_flash_width, epd_bitmap_flash_height, epd_bitmap_flash);
+      u8g2.drawXBMP(55, 25, epd_bitmap_wifi_width, epd_bitmap_wifi_height, epd_bitmap_wifi);
+
+      // alternative for wifi symbol:
+      // u8g2.setFont(u8g2_font_open_iconic_embedded_2x_t);
+      // u8g2.drawUTF8(54, 45, "\x50");
+    } else {
+      // Serial.println(" toggle heating symbol OFF display");
+      // // clear heating symbol area
+      // u8g2.setDrawColor(0); // set draw color to black
+      // u8g2.drawBox(0, 10, 20, 30);
+      // u8g2.setDrawColor(1); // reset draw color to white
+    }
+    u8g2.sendBuffer(); // transfer internal memory to the display
+    delay(5000);
   }
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ lifecycle ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
