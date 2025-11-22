@@ -178,7 +178,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LEDExpiringToggler::LOW_IS_ON);
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LedUtils::LOW_IS_ON);
   blueToggler->activate();
   while (true) {
     delay(20);
@@ -187,10 +187,10 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   }
 
   /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LEDExpiringToggler::LOW_IS_ON); // blinks 1 times turning o1 second
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks 1 times turning o1 second
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LEDExpiringToggler::HIGH_IS_ON); // blinks 1 times turning o1 second
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // blinks 1 times turning o1 second
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler->activate();

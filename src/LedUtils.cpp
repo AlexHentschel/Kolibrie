@@ -2,8 +2,10 @@
 #include <cstdint>     // For int64_t
 #include <esp_timer.h> // For esp_timer_get_time()
 
-// CLASS LEDExpiringToggler
-//
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                                   CLASS LEDExpiringToggler                                     *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
 // This class toggles a GPIO Pin (uint8_t for ESP32 - style GPIOx) on and off
 // throughout a specified interval. Each time `activate()` is called, the internal
 // time reference `lastActivationObservedMilli` is set to the current time milliseconds.
@@ -23,9 +25,6 @@
 // This implementation is intended to run on the controller loop, consuming minimal
 // resources. Results should be largely deterministic across different controllers as
 // we don't rely on CPU frequency.
-
-const bool LEDExpiringToggler::HIGH_IS_ON = true;
-const bool LEDExpiringToggler::LOW_IS_ON = false;
 
 // constructor:
 LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned long toggleIntervalMs, bool highIsOn)

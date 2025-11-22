@@ -2,8 +2,9 @@
 #include <cstdint>     // For int64_t
 #include <esp_timer.h> // For esp_timer_get_time()
 
-// CLASS PrintLifeSign
-//
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                                     CLASS PrintLifeSign                                        *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // This class prints a life-sign message to the Serial console at specified intervals.
 // It is intended to run on the controller loop, consuming minimal resources.
 

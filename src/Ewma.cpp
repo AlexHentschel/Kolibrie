@@ -1,8 +1,9 @@
 #include "Ewma.h"
 
-// CLASS Ewma
-//
-// Exponential weighted moving average [EWMA].
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                     CLASS Ewma  -  Exponential weighted moving average                         *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+//  [EWMA].
 //
 // Given a starting value S_0, and a series of input samples x_1, x_2, ..., x_t, the EWMA S_t is defined recursively as:
 // S_i = α * x_i + (1 - α) * S_{i-1}

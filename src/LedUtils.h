@@ -2,6 +2,11 @@
 #include "FrequentlyUtils.h"
 #include <Arduino.h>
 
+namespace LedUtils {
+  constexpr bool HIGH_IS_ON = true;
+  constexpr bool LOW_IS_ON = false;
+}
+
 class LEDExpiringToggler {
 
   // This class toggles a GPIO Pin (uint8_t for ESP32 - style GPIOx) on and off

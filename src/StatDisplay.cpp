@@ -2,35 +2,39 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 
-#define __OLED_width 72
-#define __OLED_height 40
+namespace {
+  constexpr int OLED_width = 72;
+  constexpr int OLED_height = 40;
 
-#define __epd_bitmap_wifi_width 12
-#define __epd_bitmap_wifi_height 12
+  constexpr int epd_bitmap_wifi_width = 12;
+  constexpr int epd_bitmap_wifi_height = 12;
 
-// Toggler for blinking the "heating symbol" on the OLED screen when the external load is active
-// Char 'flash-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 20x20 pixels
-#define __epd_bitmap_flash_width 20
-#define __epd_bitmap_flash_height 20
-const unsigned char _epd_bitmap_flash[] PROGMEM = {
-    0x00, 0x0E, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x07, 0x00, 0x80, 0x07, 0x00,
-    0xC0, 0x03, 0x00, 0xC0, 0x7F, 0x00, 0xE0, 0x3F, 0x00, 0x40, 0x3E, 0x00,
-    0x00, 0x1C, 0x00, 0x00, 0x1E, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x0E, 0x00,
-    0x40, 0x2F, 0x00, 0xE0, 0x3F, 0x00, 0xC0, 0x1F, 0x00, 0xC0, 0x0F, 0x00,
-    0xC0, 0x07, 0x00, 0x80, 0x03, 0x00, 0x80, 0x01, 0x00, 0x80, 0x00, 0x00};
+  // Toggler for blinking the "heating symbol" on the OLED screen when the external load is active
+  // Char 'flash-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 20x20 pixels
+  constexpr int epd_bitmap_flash_width = 20;
+  constexpr int epd_bitmap_flash_height = 20;
+  const unsigned char epd_bitmap_flash[] PROGMEM = {
+      0x00, 0x0E, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x07, 0x00, 0x80, 0x07, 0x00,
+      0xC0, 0x03, 0x00, 0xC0, 0x7F, 0x00, 0xE0, 0x3F, 0x00, 0x40, 0x3E, 0x00,
+      0x00, 0x1C, 0x00, 0x00, 0x1E, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x0E, 0x00,
+      0x40, 0x2F, 0x00, 0xE0, 0x3F, 0x00, 0xC0, 0x1F, 0x00, 0xC0, 0x0F, 0x00,
+      0xC0, 0x07, 0x00, 0x80, 0x03, 0x00, 0x80, 0x01, 0x00, 0x80, 0x00, 0x00};
 
-// Wify symbol for display on OLED screen when wifi internet connection is active
-// Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
-#define __epd_bitmap_wifi_width 12
-#define __epd_bitmap_wifi_height 12
-const unsigned char _epd_bitmap_wifi[] PROGMEM = {
-    0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00,
-    0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E};
+  // Wifi symbol for display on OLED screen when wifi internet connection is active
+  // Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
+  const unsigned char epd_bitmap_wifi[] PROGMEM = {
+      0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00,
+      0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E};
+}
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                                      CLASS StatDisplay                                         *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+// Constructor
 StatDisplay::StatDisplay(U8G2 &display, unsigned long heatingSymbolOnDurationMs, unsigned long heatingSymbolOffDurationMs)
     : display(display),
       extLoadOnDisplayBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs) {
-  // Constructor
 }
 
 void StatDisplay::setTemp(float temp) {
@@ -71,8 +75,8 @@ void StatDisplay::setWifiStatus(bool isConnected) {
 }
 
 void StatDisplay::checkRedraw() {
-  display.clearBuffer();                                // clear the internal memory
-  display.drawFrame(0, 0, __OLED_width, __OLED_height); // draw a frame around the border
+  display.clearBuffer();                            // clear the internal memory
+  display.drawFrame(0, 0, OLED_width, OLED_height); // draw a frame around the border
   display.setBitmapMode(1);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌----╌╌╌╌ Temperature ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
@@ -99,12 +103,12 @@ void StatDisplay::checkRedraw() {
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Blinking heating symbol ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   if ((extLoadOnDisplayBlinker.isActive()) && (extLoadOnDisplayBlinker.isCurrentStateOn())) {
-    display.drawXBMP(37, 15, __epd_bitmap_flash_width, __epd_bitmap_flash_height, _epd_bitmap_flash);
+    display.drawXBMP(37, 15, epd_bitmap_flash_width, epd_bitmap_flash_height, epd_bitmap_flash);
   }
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Wifi symbol ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   if (this->wifiConnected) {
-    display.drawXBMP(55, 25, __epd_bitmap_wifi_width, __epd_bitmap_wifi_height, _epd_bitmap_wifi);
+    display.drawXBMP(55, 25, epd_bitmap_wifi_width, epd_bitmap_wifi_height, epd_bitmap_wifi);
   }
 
   dataUpdated = false;
