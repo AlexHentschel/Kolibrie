@@ -1,0 +1,8 @@
+#define __epd_bitmap_wifi_width 12
+#define __epd_bitmap_wifi_height 12
+
+// Wify symbol for display on OLED screen when wifi internet connection is active
+// Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
+const unsigned char _epd_bitmap_wifi[] PROGMEM = {
+  0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00, 
+  0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E };
