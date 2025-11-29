@@ -104,10 +104,11 @@ bool FrequencyToggler2::checkToggle() {
   int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
   int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
 
-  // If the lifetime has expired, mark as expired and return false.
+  // If the lifetime has expired, mark as expired and inform the caller whether the state has changed from on->off.
   // note: negative lifetimeMs means no expiration
   if (((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) || (status == _status::ShouldExpire)) {
-    // we only want to toggle, if the current state is "on" when the lifetime expires
+    // We only want to toggle, if the current state is "on" when the lifetime expires.
+    // Otherwise, we just quietly remain in the off state, but set out internal state to expired.
     bool sendToggleSignal = stateIsOn;
     status = _status::Expired;
     stateIsOn = false;
@@ -167,10 +168,10 @@ void FrequencyToggler2::advanceState(int64_t currentMillis) {
     //   and we accumulatedAdvanceMs = toggleDurationOnMs + toggleDurationOffMs.
     // We now attempt to advance by another two toggles in one step, leaving the boolean status of `stateIsOn` invariant. In total,
     // we have then advanced by accumulatedAdvanceMs = 2 * (toggleDurationOnMs + toggleDurationOffMs). Subsequently, we attempt to
-    // add the updated accumulatedAdvanceMs again, yielding a total updated advance of 4 * (toggleDurationOnMs + toggleDurationOffMs).
+    // add the updated accumulatedAdvanceMs again, yielding a total advance of 4 * (toggleDurationOnMs + toggleDurationOffMs).
     //
     // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
-    // by construction is guaranteed to be less than currentMillis. Then, we restart the proceed from the start.
+    // by construction is guaranteed to be less than currentMillis. Then, we restart the proceed from the last point we have not overshot.
 
     for (int64_t speculativeExponentialAdvanceMs = nextTriggerAtOrAfterMilli + accumulatedAdvanceMs;
          currentMillis > speculativeExponentialAdvanceMs;
@@ -179,7 +180,7 @@ void FrequencyToggler2::advanceState(int64_t currentMillis) {
     }
 
     // At this point, we _always_ have currentMillis  <= nextTriggerAtOrAfterMilli, so we sill need to advance further.
-    // However, as our last exponential step overshot, we now restart again by adding the minimal increments
+    // However, as our last speculative exponential step overshot, we now restart again by adding the minimal increments
 
   } while (true);
 }

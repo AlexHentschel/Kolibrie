@@ -24,9 +24,11 @@ class StatDisplay {
   U8G2 &display;
   int temp;
   bool wifiConnected;
-  FrequencyToggler2 extLoadOnDisplayBlinker;
+
+  // heatingStatusBlinker toggles the heating symbol on/off. We also use it directly to track whether
+  // heating is on or off by using the FrequencyToggler2's `activate()` and `expire()` methods.
+  FrequencyToggler2 heatingStatusBlinker;
 
   bool dataUpdated;
-
   bool shouldRedraw();
 };

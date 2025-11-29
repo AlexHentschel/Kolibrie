@@ -1,11 +1,10 @@
-#include "StatDisplay.h"
 #include <Arduino.h>
 #include <U8g2lib.h>
 
-namespace {
-  constexpr int OLED_width = 72;
-  constexpr int OLED_height = 40;
+#include "Display.h"
+#include "StatDisplay.h"
 
+namespace {
   constexpr int epd_bitmap_wifi_width = 12;
   constexpr int epd_bitmap_wifi_height = 12;
 
@@ -34,11 +33,11 @@ namespace {
 // Constructor
 StatDisplay::StatDisplay(U8G2 &display, unsigned long heatingSymbolOnDurationMs, unsigned long heatingSymbolOffDurationMs)
     : display(display),
-      extLoadOnDisplayBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs) {
+      heatingStatusBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs) {
 }
 
 void StatDisplay::setTemp(float temp) {
-  if (!isfinite(temp) || !isnan(temp)) {
+  if (!isfinite(temp) || isnan(temp)) {
     return; // Ignore invalid temperature values
   }
   int newTemp;
@@ -57,13 +56,13 @@ void StatDisplay::setTemp(float temp) {
 }
 
 void StatDisplay::setHeatingStatus(bool isOn) {
-  if (extLoadOnDisplayBlinker.isActive() == isOn) return; // no state change
+  if (heatingStatusBlinker.isActive() == isOn) return; // no state change
   dataUpdated = true;
 
   if (isOn) {
-    extLoadOnDisplayBlinker.activate();
+    heatingStatusBlinker.activate();
   } else {
-    extLoadOnDisplayBlinker.expire();
+    heatingStatusBlinker.expire();
   }
 }
 
@@ -75,34 +74,30 @@ void StatDisplay::setWifiStatus(bool isConnected) {
 }
 
 void StatDisplay::checkRedraw() {
-  display.clearBuffer();                            // clear the internal memory
-  display.drawFrame(0, 0, OLED_width, OLED_height); // draw a frame around the border
-  display.setBitmapMode(1);
+  if (!shouldRedraw()) return;
+
+  display.clearBuffer();                                              // clear the internal memory
+  display.drawFrame(0, 0, Display::OLED_width, Display::OLED_height); // draw a frame around the border
+  display.setBitmapMode(1);                                           // this helps with transparent drawing of bitmap backgrounds
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌----╌╌╌╌ Temperature ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   int t = this->temp;
   if (t >= 0) {
     display.setFont(u8g2_font_logisoso30_tf); // same font as for "°C" symbol, hence do not use reduced font
-    // convert this->temp to string and draw
-    // char tempStr[4]; // integer
-    // snprintf(tempStr, sizeof(tempStr), "%d", this->temp);
-    // display.drawUTF8(2, 34, tempStr);
-
-    // display.setCursor(2, 34);
-    // display.print(this->temp);
   } else {
+    // for negative temperatures, use smaller font to accommodate minus sign
     display.setFont(u8g2_font_logisoso26_tn); // numbers-only font [ending "tn"]
   }
   display.setCursor(2, 34);
   display.print(t);
 
-  display.setFont(u8g2_font_logisoso30_tf);
+  display.setFont(u8g2_font_logisoso30_tf); // need full font including special characters for '°' char
   display.drawUTF8(42, 40, "°");
-  display.setFont(u8g2_font_logisoso18_tf);
+  display.setFont(u8g2_font_logisoso18_tr); // font containing letters only [ending "tr"]
   display.drawUTF8(54, 22, "C");
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Blinking heating symbol ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  if ((extLoadOnDisplayBlinker.isActive()) && (extLoadOnDisplayBlinker.isCurrentStateOn())) {
+  if (heatingStatusBlinker.isCurrentStateOn()) {
     display.drawXBMP(37, 15, epd_bitmap_flash_width, epd_bitmap_flash_height, epd_bitmap_flash);
   }
 
@@ -111,13 +106,14 @@ void StatDisplay::checkRedraw() {
     display.drawXBMP(55, 25, epd_bitmap_wifi_width, epd_bitmap_wifi_height, epd_bitmap_wifi);
   }
 
-  dataUpdated = false;
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ lifecycle ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   display.sendBuffer();
+  dataUpdated = false;
 }
 
 bool StatDisplay::shouldRedraw() {
   if (dataUpdated) return true;
-  if (extLoadOnDisplayBlinker.checkToggle()) return true;
+  if (heatingStatusBlinker.checkToggle()) return true;
 
   return false;
 };
