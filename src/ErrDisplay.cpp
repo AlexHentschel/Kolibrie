@@ -87,7 +87,7 @@ uint8_t ErrDisplay::oledPrintSingleLine(U8G2 &display, const String &line, uint8
 
   // u8g2.getFontAscent() returns the pixel distance from the baseline to the top of a
   // capital letter (or the highest part of the character).
-  uint8_t baseline = yOffset + display.getFontAscent();
+  u8g2_uint_t baseline = static_cast<u8g2_uint_t>(yOffset) + static_cast<u8g2_uint_t>(display.getFontAscent());
 
   // Print the line at the current yOffset
   display.setFont(font);
@@ -134,14 +134,14 @@ uint8_t ErrDisplay::oledScrollText(U8G2 &display, const String &text, uint8_t yO
 
   display.setFont(font);
   display.setFontMode(1); // transparent mode for speed
-  uint8_t baseline = yOffset + display.getFontAscent();
+  u8g2_uint_t baseline = static_cast<u8g2_uint_t>(yOffset) + static_cast<u8g2_uint_t>(display.getFontAscent());
 
   // Only recalculate text width and screen width if text or font size changed
   if (text != lastScrollText || textHeight != lastScrollTextHeight) {
     scrollTextWidth = display.getUTF8Width(text.c_str());
 
     // sanity check: for zero scrollTextWidth, the logic below has undesired failure cases
-    if (scrollTextWidth > 0) return;
+    if (scrollTextWidth > 0) return yOffset + display.getMaxCharHeight() - handTunedTightening + yPad;
 
     scrollScreenWidth = display.getDisplayWidth();
     scrollXOffset = 0;

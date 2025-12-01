@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 
-
 class ErrDisplay {
 
   // CLASS ErrDisplay
@@ -22,7 +21,7 @@ class ErrDisplay {
   // Lifecycle functions
   void setErrorMessages(String topBlinkingMessage, String bottomScrollingMessage);
 
-private:
+  private:
   U8G2 &display;
   String topBlinkingMessage;
   String bottomScrollingMessage;
@@ -34,16 +33,16 @@ private:
   bool shouldRedraw();
 
   // State for scrolling text
-  int scrollXOffset = 0; // current scroll offset in pixels
-  int scrollTextWidth = 0; // width of the text in pixels
-  int scrollScreenWidth = 0; // width of the display in pixels
-  int scrollSpeedPxPerSec = 20; // scrolling speed in pixels per second (default 20)
-  int64_t lastScrollUpdateUs = 0; // last update time in microseconds
-  String lastScrollText = ""; // last scrolled text
+  int scrollXOffset = 0;            // current scroll offset in pixels
+  int scrollTextWidth = 0;          // width of the text in pixels
+  int scrollScreenWidth = 0;        // width of the display in pixels
+  int scrollSpeedPxPerSec = 20;     // scrolling speed in pixels per second (default 20)
+  int64_t lastScrollUpdateUs = 0;   // last update time in microseconds
+  String lastScrollText = "";       // last scrolled text
   uint8_t lastScrollTextHeight = 0; // last used text height
 
   // internal service methods
   // Print a single line of text at a given y-offset, return updated y-offset for next line
-  uint8_t oledPrintSingleLine(U8G2 &display, const String &line, uint8_t yOffset, uint8_t textHeight /* = 16 */);
-  uint8_t oledScrollText(U8G2 &display, const String &text, uint8_t yOffset, uint8_t textHeight /* = 16 */, int scrollSpeedPxPerSec /* = 20 */);
+  uint8_t oledPrintSingleLine(U8G2 &display, const String &line, uint8_t yOffset, uint8_t textHeight = 16);
+  uint8_t oledScrollText(U8G2 &display, const String &text, uint8_t yOffset, uint8_t textHeight = 16, int scrollSpeedPxPerSec = 20);
 };
