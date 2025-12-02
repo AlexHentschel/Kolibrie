@@ -1,6 +1,8 @@
 #pragma once
 #include <U8g2lib.h>
 
+class DisplayText; // Forward declaration
+
 namespace Display {
   constexpr u8g2_uint_t OLED_width = 72;
   constexpr u8g2_uint_t OLED_height = 40;
@@ -23,7 +25,12 @@ namespace Display {
   // The function does not clear or send the buffer, so the caller can compose multiple lines before sending.
   //
   u8g2_uint_t oledPrintSingleLine(U8G2 &display, const String &line, const u8g2_uint_t yOffset, const uint8_t textHeight = 16);
+  u8g2_uint_t oledPrintSingleLine(U8G2 &display, const DisplayText &line, const u8g2_uint_t yOffset);
 }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                                      CLASS DisplayText                                         *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // DisplayText: Encapsulates font selection and text metrics for a single line of text.
 class DisplayText {
@@ -37,9 +44,10 @@ class DisplayText {
 
   // Getters for font and metrics
   const uint8_t *font() const { return font_; }
+  const String string() const { return text_; }
   u8g2_uint_t getFontAscent() const { return fontAscent_; }
   int textWidth() const { return textWidth_; }
-  unsigned int length();
+  unsigned int length() const;
 
   u8g2_uint_t getNextLineYOffset() const { return nextLineYOffset_; }
   const char *c_str() const { return text_.c_str(); }
@@ -52,6 +60,10 @@ class DisplayText {
   u8g2_uint_t nextLineYOffset_;
 };
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
+ *                                      CLASS DisplayScrollText                                   *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
 // DisplayScrollText: Scroll a single line of text horizontally on the OLED.
 // Call redraw() once per loop for smooth scrolling. Does not clear or send the buffer.
 // All display and font parameters are precomputed for efficiency.
@@ -63,7 +75,15 @@ class DisplayScrollText {
   // @param yOffset: vertical offset (top of text block)
   // @param textHeight: font height (default 16)
   // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
-  DisplayScrollText(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight = 16, u8g2_uint_t scrollSpeedPxPerSec = 20);
+  DisplayScrollText(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight = 16, u8g2_uint_t scrollSpeedPxPerSec = 15);
+
+  // Construct a scrolling text line for the OLED display.
+  // @param display: U8G2 display reference
+  // @param line: text to scroll
+  // @param yOffset: vertical offset (top of text block)
+  // @param textHeight: font height (default 16)
+  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
+  DisplayScrollText(U8G2 &display, const DisplayText &line, u8g2_uint_t yOffset, u8g2_uint_t scrollSpeedPxPerSec = 15);
 
   // Get the y-offset for the next line below this text.
   u8g2_uint_t getNextLineYOffset() const;
@@ -72,17 +92,16 @@ class DisplayScrollText {
   ~DisplayScrollText();
 
   // Lifecycle functions
-  void activate(long delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                   // disables the trigger
-  bool isExpired() const;          // returns true if the trigger is expired/disabled (inverse of `isActive()`)
-  bool isActive() const;           // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned long delayMs = 0); // activates the scroller (after optional delay [milliseconds])
+  void expire();                            // disables the scroller
+  bool isExpired() const;                   // returns true if the scroller is expired/disabled (inverse of `isActive()`)
+  bool isActive() const;                    // returns true if the scroller is active (irrespective whether the toggler's state is on or off)
 
-  // returns true if the
-  bool shouldRedraw(int64_t &currentMicros);
+  // returns true if the display's content should be redrawn for this scrolling text. Call once per loop.
+  bool shouldRedraw(int64_t currentMicros);
 
-  // Update the display buffer for this scrolling text. Call once per loop.
-  //   void redraw(int64_t currentMicros);
-
+  // Update the display buffer for this scrolling text. Always draws the current state.
+  // Call once per loop after `shouldRedraw()` returned true. Or when other composed elements require a redraw.
   void draw(int64_t currentMicros);
 
   private:

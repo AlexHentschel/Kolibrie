@@ -80,15 +80,16 @@ class FrequencyToggler2 {
   // the time for the next switch on <-> off has been reached or surpassed.
   // To find out whether the current state is on or off, the user must call `isCurrentStateOn()`.
   bool checkToggle();
+  bool checkToggle(int64_t currentMicros);
 
   // Returns true if the current state is "on", false if "off".
   bool isCurrentStateOn();
 
   // Lifecycle functions
-  void activate(long delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                   // disables the trigger
-  bool isExpired();                // returns true if the trigger is expired/disabled (inverse of `isActive()`)
-  bool isActive();                 // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned long delayMs = 0); // activates the trigger (after optional delay [milliseconds])
+  void expire();                            // disables the trigger
+  bool isExpired();                         // returns true if the trigger is expired/disabled (inverse of `isActive()`)
+  bool isActive();                          // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
 
   private:
   // Internally, the `checkToggle()` represents three states:
@@ -112,6 +113,7 @@ class FrequencyToggler2 {
   bool stateIsOn;
   _status status;
 
+  bool checkToggle_(int64_t currentMicros);
   void advanceState(int64_t currentMillis);
 };
 
@@ -148,10 +150,10 @@ class FrequencyToggler {
   bool isCurrentStateOn();
 
   // Lifecycle functions
-  void activate(long delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                   // disables the trigger
-  bool isExpired();                // returns true if the trigger is expired/disabled (inverse of `isActive()`)
-  bool isActive();                 // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned long delayMs = 0); // activates the trigger (after optional delay [milliseconds])
+  void expire();                            // disables the trigger
+  bool isExpired();                         // returns true if the trigger is expired/disabled (inverse of `isActive()`)
+  bool isActive();                          // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
 
   private:
   FrequencyToggler2 frequencyToggler2;

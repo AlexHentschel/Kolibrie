@@ -1,7 +1,10 @@
 #pragma once
-#include "FrequentlyUtils.h"
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include <memory>
+
+#include "Display.h"
+#include "FrequentlyUtils.h"
 
 class ErrDisplay {
 
@@ -12,25 +15,23 @@ class ErrDisplay {
   // be scrolled if too long to fit on the display within the time of displayDurationMs.
 
   public:
-  ErrDisplay(U8G2 &display, unsigned long displayDurationMs); // constructor
+  ErrDisplay(U8G2 &display, const DisplayText &topBlinkingMessage, const DisplayText &bottomScrollingMessage, u8g2_uint_t scrollSpeedPxPerSec = 15); // constructor
 
   // checkRedraw is intended to be called with high frequency, e.g. by the controller `loop`. It re-draws the
   // the display only if data has changed since the last draw.
   void checkRedraw();
 
-  // Lifecycle functions
-  void setErrorMessages(String topBlinkingMessage, String bottomScrollingMessage);
-
   private:
-  U8G2 &display;
-  String topBlinkingMessage;
-  String bottomScrollingMessage;
+  U8G2 &display_;
 
   // topMessageBlinker toggles the top error message on/off.
+  const DisplayText topBlinkingMessage_;
   FrequencyToggler2 topMessageBlinker;
 
-  bool dataUpdated;
-  bool shouldRedraw();
+  const DisplayText bottomScrollingMessage_;
+  DisplayScrollText bottomScroller;
+
+  bool shouldRedraw(int64_t currentMicros);
 
   // State for scrolling text
   int scrollXOffset = 0;            // current scroll offset in pixels

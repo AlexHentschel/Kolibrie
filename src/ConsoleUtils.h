@@ -27,9 +27,9 @@ class PrintLifeSign {
   void checkConsolePrint(); // Loop function
 
   // Lifecycle functions
-  void activate(long delayMs = 0); // activates the life-sign printing (after optional delay [milliseconds])
-  void expire();                   // disables the life-sign printing
-  bool isExpired();                // returns true if life-sign printing is expired/disabled
+  void activate(unsigned long delayMs = 0); // activates the life-sign printing (after optional delay [milliseconds])
+  void expire();                            // disables the life-sign printing
+  bool isExpired();                         // returns true if life-sign printing is expired/disabled
 
   private:
   // behavioral parameters are lifetime-constants (provided at construction)

@@ -46,7 +46,7 @@ void LEDExpiringToggler::checkToggleLED() {
   }
 }
 
-void LEDExpiringToggler::activate(long delayMs /* = 0 */) {
+void LEDExpiringToggler::activate(unsigned long delayMs /* = 0 */) {
   // Calling activate() itself leaves the LED off, but activates the LED toggling cycle (after specified delay).
   // The next call to `checkToggleLED()` (after `delayMs` milliseconds), will turn the LED on.
   // This is exactly how the underlying FrequencyToggler works.

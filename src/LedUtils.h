@@ -27,9 +27,9 @@ class LEDExpiringToggler {
   void checkToggleLED(); // Loop function
 
   // Lifecycle functions
-  void activate(long delayMs = 0); // activates the LED toggling (after optional delay [milliseconds])
-  void expire();                   // disables the LED toggling
-  bool isExpired();                // returns true if LED toggling is expired/disabled
+  void activate(unsigned long delayMs = 0); // activates the LED toggling (after optional delay [milliseconds])
+  void expire();                            // disables the LED toggling
+  bool isExpired();                         // returns true if LED toggling is expired/disabled
 
   static const bool HIGH_IS_ON; // Indicates that GPIO state HIGH means LED is on
   static const bool LOW_IS_ON;  // Indicates that GPIO state LOW means LED is on (modus operandi for build-in LEDs in Arduino Nano EPS32)

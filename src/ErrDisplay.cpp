@@ -9,32 +9,31 @@
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // Constructor
-ErrDisplay::ErrDisplay(U8G2 &display, unsigned long displayDurationMs)
-    : display(display),
-      dataUpdated(false),
-      topMessageBlinker(FrequencyUtils::unbounded_lifetime, 500, 200) {
-
-  topBlinkingMessage = "";
-  bottomScrollingMessage = "";
-}
-
-void ErrDisplay::setErrorMessages(String topBlinkingMessage, String bottomScrollingMessage) {
-  if (this->topBlinkingMessage != topBlinkingMessage) {
-    this->topBlinkingMessage = topBlinkingMessage;
-    dataUpdated = true;
-  }
-  if (this->bottomScrollingMessage != bottomScrollingMessage) {
-    this->bottomScrollingMessage = bottomScrollingMessage;
-    dataUpdated = true;
-  }
+ErrDisplay::ErrDisplay(U8G2 &display, const DisplayText &topBlinkingMessage, const DisplayText &bottomScrollingMessage, u8g2_uint_t scrollSpeedPxPerSec /* = 15 */)
+    : display_(display),
+      topBlinkingMessage_(topBlinkingMessage),
+      topMessageBlinker(FrequencyUtils::unbounded_lifetime, 700, 300),
+      bottomScrollingMessage_(bottomScrollingMessage),
+      bottomScroller(display_, bottomScrollingMessage_, topBlinkingMessage.getNextLineYOffset(), scrollSpeedPxPerSec) {
+  topMessageBlinker.activate();
+  bottomScroller.activate();
 }
 
 void ErrDisplay::checkRedraw() {
-  if (!shouldRedraw()) return;
+  int64_t currentMicros = esp_timer_get_time();
+  if (!shouldRedraw(currentMicros)) return;
+
+  display_.clearBuffer();                                         // clear the internal memory
+  Display::oledPrintSingleLine(display_, topBlinkingMessage_, 0); // Top Line
+  bottomScroller.draw(esp_timer_get_time());                      // Bottom Line
+  display_.sendBuffer();
 };
 
-bool ErrDisplay::shouldRedraw() {
-  return dataUpdated;
+// not idempotent: consumes toggles, for internal use only
+bool ErrDisplay::shouldRedraw(int64_t currentMicros) {
+  if (topMessageBlinker.checkToggle(currentMicros)) return true;
+  if (bottomScroller.shouldRedraw(currentMicros)) return true;
+  return false;
 };
 
 // Service function: Print a single line of text on the OLED, left-aligned, with configurable text size and y-offset.

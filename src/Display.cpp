@@ -67,6 +67,21 @@ u8g2_uint_t Display::oledPrintSingleLine(U8G2 &display, const String &line, cons
   return yOffset + display.getMaxCharHeight() - handTunedTightening_ + yPad_;
 }
 
+u8g2_uint_t Display::oledPrintSingleLine(U8G2 &display, const DisplayText &line, const u8g2_uint_t yOffset) {
+  if (line.length() < 1) return yOffset;
+
+  // u8g2.getFontAscent() returns the pixel distance from the baseline to the top of a
+  // capital letter (or the highest part of the character).
+  u8g2_uint_t baseline = yOffset + line.getFontAscent();
+
+  // Print the line at the current yOffset
+  display.setFont(line.font());
+  display.drawStr(0, baseline, line.c_str());
+
+  // Return updated yOffset for next line
+  return yOffset + line.getNextLineYOffset();
+}
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                       CLASS DisplayText                                        *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -82,7 +97,7 @@ DisplayText::DisplayText(U8G2 &display, const String &text, uint8_t textHeight) 
   nextLineYOffset_ = display.getMaxCharHeight() - handTunedTightening_ + yPad_;
 }
 
-unsigned int DisplayText::length() { return text_.length(); }
+unsigned int DisplayText::length() const { return text_.length(); }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                   CLASS DisplayScrollText                                      *
@@ -100,9 +115,21 @@ static int64_t computeOnePixelDurationUs_(u8g2_uint_t scrollSpeedPxPerSec) {
   return 1000000LL / static_cast<int64_t>(s);
 }
 
-DisplayScrollText::DisplayScrollText(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight, u8g2_uint_t scrollSpeedPxPerSec)
+DisplayScrollText::DisplayScrollText(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight, u8g2_uint_t scrollSpeedPxPerSec /* = 15 */)
     : display_(display),
       line_(display, line, textHeight),
+      yOffset_(yOffset),
+      scrollSpeedPxPerSec_(clampScrollSpeed(scrollSpeedPxPerSec)),
+      onePixelDurationMicros(computeOnePixelDurationUs_(scrollSpeedPxPerSec_)),
+      status_(_status::Expired),
+      scrollXOffset_(0),
+      lastScrollUpdateMicros(0) {
+  //
+}
+
+DisplayScrollText::DisplayScrollText(U8G2 &display, const DisplayText &line, u8g2_uint_t yOffset, u8g2_uint_t scrollSpeedPxPerSec /* = 15 */)
+    : display_(display),
+      line_(line),
       yOffset_(yOffset),
       scrollSpeedPxPerSec_(clampScrollSpeed(scrollSpeedPxPerSec)),
       onePixelDurationMicros(computeOnePixelDurationUs_(scrollSpeedPxPerSec_)),
@@ -116,7 +143,7 @@ DisplayScrollText::~DisplayScrollText() {
   // No dynamic memory to free, but method provided for completeness
 }
 
-void DisplayScrollText::activate(long delayMs) {
+void DisplayScrollText::activate(unsigned long delayMs) {
   if (line_.textWidth() < 1) return;
 
   status_ = _status::Active;
@@ -165,21 +192,17 @@ void DisplayScrollText::draw(int64_t currentMicros) {
 
   int x = scrollXOffset_;
   display_.setFont(line_.font());
+  display_.setBitmapMode(1); // helps with smoother scrolling (?)
   do {
     display_.drawUTF8(x, yOffset_ + line_.getFontAscent(), line_.c_str());
     x += line_.textWidth();
   } while (x < Display::OLED_width);
 }
 
-bool DisplayScrollText::shouldRedraw(int64_t &currentMicros) {
-  if (status_ == _status::Expired) return false;
+bool DisplayScrollText::shouldRedraw(int64_t currentMicros) {
+  if (status_ == _status::Expired) return false;       // expired
+  if (currentMicros < startActiveMicros) return false; // not yet active
 
-  int64_t t = esp_timer_get_time();
-  if (t < startActiveMicros) return false; // not yet active
-
-  int64_t elapsed = t - lastScrollUpdateMicros;
-  if (elapsed < onePixelDurationMicros) return false;
-
-  currentMicros = t;
-  return true;
+  int64_t elapsed = currentMicros - lastScrollUpdateMicros;
+  return (elapsed >= onePixelDurationMicros);
 };

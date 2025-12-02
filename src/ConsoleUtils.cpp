@@ -43,7 +43,7 @@ void PrintLifeSign::checkConsolePrint() {
   }
 }
 
-void PrintLifeSign::activate(long delayMs /* = 0 */) {
+void PrintLifeSign::activate(unsigned long delayMs /* = 0 */) {
   if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
   lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
   expired = false;

@@ -72,7 +72,7 @@ bool FrequencyToggler::checkToggle() { return frequencyToggler2.checkToggle(); }
 bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2.isCurrentStateOn(); }
 
 void FrequencyToggler::expire() { frequencyToggler2.expire(); }
-void FrequencyToggler::activate(long delayMs /* = 0 */) { frequencyToggler2.activate(delayMs); }
+void FrequencyToggler::activate(unsigned long delayMs /* = 0 */) { frequencyToggler2.activate(delayMs); }
 bool FrequencyToggler::isExpired() { return frequencyToggler2.isExpired(); }
 bool FrequencyToggler::isActive() { return frequencyToggler2.isActive(); }
 
@@ -99,9 +99,19 @@ FrequencyToggler2::FrequencyToggler2(int64_t lifetimeMs, unsigned long toggleDur
       nextTriggerAtOrAfterMilli(0) {
 }
 
+bool FrequencyToggler2::checkToggle(int64_t currentMicros) {
+  if (status >= 2) return false;
+  return checkToggle_(currentMicros);
+}
+
 bool FrequencyToggler2::checkToggle() {
   if (status >= 2) return false;
-  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
+  int64_t currentMicros = esp_timer_get_time();
+  return checkToggle_(currentMicros);
+}
+
+bool FrequencyToggler2::checkToggle_(int64_t currentMicros) {
+  int64_t currentMillis = currentMicros / 1000LL; // convert microseconds to milliseconds
   int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
 
   // If the lifetime has expired, mark as expired and inform the caller whether the state has changed from on->off.
@@ -131,7 +141,7 @@ bool FrequencyToggler2::isCurrentStateOn() {
   return stateIsOn;
 }
 
-void FrequencyToggler2::activate(long delayMs /* = 0 */) {
+void FrequencyToggler2::activate(unsigned long delayMs /* = 0 */) {
   if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
   lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
   status = _status::Active;
