@@ -159,8 +159,8 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
     Serial.println(F(" bits."));
   }
 
-  readTriggerTemperature = std::make_unique<FrequencyTrigger>(-1, 5000); // read temperature every 2s, unbounded lifetime
-  extLoadOnDisplayBlinker = std::make_unique<FrequencyToggler>(-1, 500); // blinks every 500ms when activated
+  readTriggerTemperature = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
+  extLoadOnDisplayBlinker = std::make_unique<FrequencyToggler>(FrequencyUtils::unbounded_lifetime, 500u); // blinks every 500ms when activated
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
