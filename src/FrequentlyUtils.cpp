@@ -2,6 +2,14 @@
 #include <cstdint>     // For int64_t
 #include <esp_timer.h> // For esp_timer_get_time()
 
+// TOTO: !!
+// Integer divisions are slow. But since we use milliseconds for our internal bookkeeping (instead of microseconds),
+// we have to do an integer division by 1000 when converting from microseconds returned by `esp_timer_get_time()`.
+// This has to happen on _every_ call to `checkTrigger()`, `checkToggle()`, etc., which is (ideally) much more frequent
+// than the toggle/trigger time scales. This might waste a lot of CPU cycles.
+// https://github.com/wled/WLED/issues/4206
+// Based on the resource above, avoiding integer division might reduce CPU load by roughly a factor of 10!
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                    CLASS FrequencyTrigger                                      *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -37,11 +45,48 @@ bool FrequencyTrigger::checkTrigger() {
   // we reached or exceeded the next trigger time:
   // • schedule next trigger time, skip missed intervals
   // • and return true
-  nextTriggerAtOrAfterMilli += triggerIntervalMs;
-  while (currentMillis >= nextTriggerAtOrAfterMilli) {
-    nextTriggerAtOrAfterMilli += triggerIntervalMs;
-  }
+  advanceState(currentMillis);
   return true;
+}
+
+// advances the internal threshold `nextTriggerAtOrAfterMilli` for next state change.
+// The algorithm effectively fast-forwards through missed intervals.
+// After `advanceState` returns, the `nextTriggerAtOrAfterMilli` is set to the closest _upcoming_
+// time had the algorithm be run more frequently. The implementation efficiently handles large time
+// jumps δ (eg. when the controller loop is busy) requiring only O(log(δ)) operations.
+//
+// Note: According to https://github.com/wled/WLED/issues/4206
+// integer divisions, especially 64bit ones can be very slow on microcontrollers (ESP32 S2, S3, C3).
+// Therefore, we avoid the integer division and instead utilize a heuristic that is very fast on the
+// most common usage pattern of no missed intervals, and still efficient (O(log(δ))) for large jumps δ.
+void FrequencyTrigger::advanceState(int64_t currentMillis) {
+  if (currentMillis < nextTriggerAtOrAfterMilli) return;
+
+  do {
+    nextTriggerAtOrAfterMilli += triggerIntervalMs;
+    if (currentMillis < nextTriggerAtOrAfterMilli) return;
+
+    int64_t accumulatedAdvanceMs = triggerIntervalMs;
+
+    // If we reach the following code, then the following holds:
+    // • currentMillis >= nextTriggerAtOrAfterMilli, so we need to advance further
+    // • accumulatedAdvanceMs = triggerIntervalMs.
+    // We now attempt to advance by another triggerIntervalMs. In total, we have then advanced by accumulatedAdvanceMs = 2 * (toggleDurationOnMs + toggleDurationOffMs).
+    // Subsequently, we attempt to add the updated accumulatedAdvanceMs again, yielding a total advance of 4 * (toggleDurationOnMs + toggleDurationOffMs).
+    //
+    // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
+    // by construction is guaranteed to be less than currentMillis. Then, we restart the proceed from the last point we have not overshot.
+
+    for (int64_t speculativeExponentialAdvanceMs = nextTriggerAtOrAfterMilli + accumulatedAdvanceMs;
+         currentMillis > speculativeExponentialAdvanceMs;
+         accumulatedAdvanceMs <<= 1) {
+      nextTriggerAtOrAfterMilli = speculativeExponentialAdvanceMs;
+    }
+
+    // At this point, we _always_ have currentMillis  <= nextTriggerAtOrAfterMilli, so we sill need to advance further.
+    // However, as our last speculative exponential step overshot, we now restart again by adding the minimal increments
+
+  } while (true);
 }
 
 void FrequencyTrigger::activate(long delayMs /* = 0 */) {
@@ -159,6 +204,16 @@ bool FrequencyToggler2::isExpired() { return !isActive(); }
 
 bool FrequencyToggler2::isActive() { return status == _status::Active; }
 
+// advances the internal threshold `nextTriggerAtOrAfterMilli` for next state change.
+// The algorithm effectively fast-forwards through missed intervals, toggling the state accordingly.
+// After `advanceState` returns, the `nextTriggerAtOrAfterMilli` is set to the closest _upcoming_
+// toggle time. The implementation efficiently handles large time jumps δ (eg. when the controller
+// loop is busy) requiring only O(log(δ)) operations.
+//
+// Note: According to https://github.com/wled/WLED/issues/4206
+// integer divisions, especially 64bit ones can be very slow on microcontrollers (ESP32 S2, S3, C3).
+// Therefore, we avoid the integer division and instead utilize a heuristic that is very fast on the
+// most common usage pattern of no missed intervals, and still efficient (O(log(δ))) for large jumps δ.
 void FrequencyToggler2::advanceState(int64_t currentMillis) {
   if (currentMillis < nextTriggerAtOrAfterMilli) return;
 

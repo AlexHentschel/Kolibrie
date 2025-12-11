@@ -44,6 +44,8 @@ class FrequencyTrigger {
   int64_t lastActivationObservedMilli;
   int64_t nextTriggerAtOrAfterMilli;
   bool expired;
+
+  void advanceState(int64_t currentMillis);
 };
 
 class FrequencyToggler2 {

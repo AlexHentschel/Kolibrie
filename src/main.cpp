@@ -55,7 +55,7 @@ std::unique_ptr<FrequencyTrigger> readTriggerTemperature = nullptr;
 #define BLUE_LED_BUILTIN 8 // GPIO 8, Blue LED: LOW = on, HIGH = off
 
 // LED Blinking patterns to indicate current state
-LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
+LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning 1 second
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -69,29 +69,6 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
 
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
 LEDExpiringToggler *extLoadToggler = nullptr;
-
-// Toggler for blinking the "heating symbol" on the OLED screen when the external load is active
-// Char 'flash-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 20x20 pixels
-#define epd_bitmap_flash_width 20
-#define epd_bitmap_flash_height 20
-const unsigned char epd_bitmap_flash[] PROGMEM = {
-    0x00, 0x0E, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x07, 0x00, 0x80, 0x07, 0x00,
-    0xC0, 0x03, 0x00, 0xC0, 0x7F, 0x00, 0xE0, 0x3F, 0x00, 0x40, 0x3E, 0x00,
-    0x00, 0x1C, 0x00, 0x00, 0x1E, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x0E, 0x00,
-    0x40, 0x2F, 0x00, 0xE0, 0x3F, 0x00, 0xC0, 0x1F, 0x00, 0xC0, 0x0F, 0x00,
-    0xC0, 0x07, 0x00, 0x80, 0x03, 0x00, 0x80, 0x01, 0x00, 0x80, 0x00, 0x00};
-
-// Wify symbol for display on OLED screen when wifi internet connection is active
-// Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
-#define epd_bitmap_wifi_width 12
-#define epd_bitmap_wifi_height 12
-const unsigned char epd_bitmap_wifi[] PROGMEM = {
-    0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00,
-    0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E};
-
-// Array of all bitmaps for convenience. (Total bytes used to store images in PROGMEM = 96)
-const int epd_bitmap_allArray_LEN = 1;
-const unsigned char *epd_bitmap_allArray[1] = {epd_bitmap_flash};
 
 std::unique_ptr<FrequencyToggler> extLoadOnDisplayBlinker = nullptr;
 
