@@ -31,9 +31,10 @@ namespace {
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // Constructor
-StatDisplay::StatDisplay(U8G2 &display, unsigned long heatingSymbolOnDurationMs, unsigned long heatingSymbolOffDurationMs)
+StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, unsigned int heatingSymbolOffDurationMs)
     : display(display),
-      heatingStatusBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs) {
+      heatingStatusBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs),
+      temp(0), wifiConnected(false), dataUpdated(false) {
 }
 
 void StatDisplay::setTemp(float temp) {
@@ -73,8 +74,8 @@ void StatDisplay::setWifiStatus(bool isConnected) {
   }
 }
 
-void StatDisplay::checkRedraw() {
-  if (!shouldRedraw()) return;
+void StatDisplay::checkRedraw(int64_t currentMicros) {
+  if (!shouldRedraw(currentMicros)) return;
 
   display.clearBuffer();                                              // clear the internal memory
   display.drawFrame(0, 0, Display::OLED_width, Display::OLED_height); // draw a frame around the border
@@ -111,9 +112,12 @@ void StatDisplay::checkRedraw() {
   dataUpdated = false;
 }
 
-bool StatDisplay::shouldRedraw() {
-  if (dataUpdated) return true;
-  if (heatingStatusBlinker.checkToggle()) return true;
+void StatDisplay::checkRedraw() {
+  checkRedraw(esp_timer_get_time());
+}
 
+bool StatDisplay::shouldRedraw(int64_t currentMicros) {
+  if (dataUpdated) return true;
+  if (heatingStatusBlinker.checkToggle(currentMicros)) return true;
   return false;
-};
+}

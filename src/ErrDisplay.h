@@ -19,6 +19,9 @@ class ErrDisplay {
 
   // checkRedraw is intended to be called with high frequency, e.g. by the controller `loop`. It re-draws the
   // the display only if data has changed since the last draw.
+  void checkRedraw(int64_t currentMicros);
+
+  // Convenience: calls esp_timer_get_time() internally (less efficient)
   void checkRedraw();
 
   private:
@@ -26,10 +29,10 @@ class ErrDisplay {
 
   // topMessageBlinker toggles the top error message on/off.
   const DisplayText topBlinkingMessage_;
-  FrequencyToggler2 topMessageBlinker;
+  FrequencyToggler2 topMessageBlinker_;
 
   const DisplayText bottomScrollingMessage_;
-  DisplayScrollText bottomScroller;
+  DisplayScrollText bottomScroller_;
 
   bool shouldRedraw(int64_t currentMicros);
 
@@ -44,6 +47,4 @@ class ErrDisplay {
 
   // internal service methods
   // Print a single line of text at a given y-offset, return updated y-offset for next line
-  uint8_t oledPrintSingleLine(U8G2 &display, const String &line, uint8_t yOffset, uint8_t textHeight = 16);
-  uint8_t oledScrollText(U8G2 &display, const String &text, uint8_t yOffset, uint8_t textHeight = 16, int scrollSpeedPxPerSec = 20);
 };

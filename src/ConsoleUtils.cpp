@@ -27,6 +27,8 @@ void PrintLifeSign::checkConsolePrint(int64_t currentMicros) {
 
 // Convenience: calls esp_timer_get_time() internally (less efficient)
 void PrintLifeSign::checkConsolePrint() {
+  // we let the internal trigger call `esp_timer_get_time()` instead of _always_ calling it here,
+  // because `trigger.checkTrigger()` shortcuts the expensive `esp_timer_get_time()` call in various cases
   if (trigger.checkTrigger()) {
     Serial.println(message);
   }

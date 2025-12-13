@@ -31,7 +31,7 @@ bool FrequencyTrigger::checkTrigger(int64_t currentMicros) {
 // Less efficient: calls esp_timer_get_time() internally
 bool FrequencyTrigger::checkTrigger() {
   if (expired) return false;
-  return checkTrigger(esp_timer_get_time());
+  return checkTrigger_(esp_timer_get_time());
 }
 
 bool FrequencyTrigger::checkTrigger_(int64_t currentMicros) {
@@ -151,8 +151,7 @@ bool FrequencyToggler2::checkToggle(int64_t currentMicros) {
 // Less efficient: calls esp_timer_get_time() internally
 bool FrequencyToggler2::checkToggle() {
   if (status >= 2) return false;
-  int64_t currentMicros = esp_timer_get_time();
-  return checkToggle_(currentMicros);
+  return checkToggle_(esp_timer_get_time());
 }
 
 bool FrequencyToggler2::checkToggle_(int64_t currentMicros) {
