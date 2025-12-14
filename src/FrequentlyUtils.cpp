@@ -2,7 +2,7 @@
 #include <cstdint>     // For int64_t
 #include <esp_timer.h> // For esp_timer_get_time()
 
-// TOTO: !!
+// TODO: !!
 // Integer divisions are slow. This file now uses microseconds for all internal time bookkeeping, avoiding division by 1000.
 // Constructors and activate() still take milliseconds for compatibility, but all internal logic is in microseconds.
 // For best performance, call esp_timer_get_time() once per controller loop and pass the value to all check...() calls.
@@ -84,8 +84,8 @@ void FrequencyTrigger::advanceState(int64_t currentMicros) {
          accumulatedAdvanceMicros <<= 1) {
       nextTriggerAtOrAfterMicros = speculativeExponentialAdvanceMicros;
     }
-    // At this point, we _always_ have currentMicros <= nextTriggerAtOrAfterMicros, so we still need to advance further.
-    // However, as our last speculative exponential step overshot, we now restart again by adding the minimal increments.
+    // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
+    // As our last speculative exponential step overshot, we now restart by adding the minimal increments.
   } while (true);
 }
 
@@ -109,16 +109,16 @@ bool FrequencyTrigger::isExpired() { return expired; }
 
 // constructor:
 FrequencyToggler::FrequencyToggler(int64_t lifetimeMs, unsigned int toggleIntervalMs)
-    : frequencyToggler2(lifetimeMs, toggleIntervalMs, toggleIntervalMs) {}
+    : frequencyToggler2_(lifetimeMs, toggleIntervalMs, toggleIntervalMs) {}
 
-bool FrequencyToggler::checkToggle(int64_t currentMicros) { return frequencyToggler2.checkToggle(currentMicros); }
-bool FrequencyToggler::checkToggle() { return frequencyToggler2.checkToggle(); }
-bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2.isCurrentStateOn(); }
+bool FrequencyToggler::checkToggle(int64_t currentMicros) { return frequencyToggler2_.checkToggle(currentMicros); }
+bool FrequencyToggler::checkToggle() { return frequencyToggler2_.checkToggle(); }
+bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2_.isCurrentStateOn(); }
 
-void FrequencyToggler::expire() { frequencyToggler2.expire(); }
-void FrequencyToggler::activate(unsigned int delayMs /* = 0 */) { frequencyToggler2.activate(delayMs); }
-bool FrequencyToggler::isExpired() { return frequencyToggler2.isExpired(); }
-bool FrequencyToggler::isActive() { return frequencyToggler2.isActive(); }
+void FrequencyToggler::expire() { frequencyToggler2_.expire(); }
+void FrequencyToggler::activate(unsigned int delayMs /* = 0 */) { frequencyToggler2_.activate(delayMs); }
+bool FrequencyToggler::isExpired() { return frequencyToggler2_.isExpired(); }
+bool FrequencyToggler::isActive() { return frequencyToggler2_.isActive(); }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                    CLASS FrequencyToggler2                                     *
@@ -238,8 +238,7 @@ void FrequencyToggler2::advanceState(int64_t currentMicros) {
          accumulatedAdvanceMicros <<= 1) {
       nextTriggerAtOrAfterMicros = speculativeExponentialAdvanceMicros;
     }
-    // At this point, we _always_ have currentMicros  <= nextTriggerAtOrAfterMicros, so we still need to advance further.
-    // However, as our last speculative exponential step overshot, we now restart again by adding the minimal increments
-
+    // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
+    // As our last speculative exponential step overshot, we now restart by adding the minimal increments.
   } while (true);
 }

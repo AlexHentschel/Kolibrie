@@ -143,11 +143,11 @@ DisplayScrollText2::~DisplayScrollText2() {
   // No dynamic memory to free, but method provided for completeness
 }
 
-void DisplayScrollText2::activate(unsigned long delayMs) {
+void DisplayScrollText2::activate(unsigned int delayMs /* = 0 */) {
   if (line_.textWidth() < 1) return;
 
   status_ = _status::Active;
-  startActiveMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs * 1000LL);
+  startActiveMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
   lastScrollUpdateMicros = startActiveMicros;
   scrollXOffset_ = 0;
 }
@@ -177,7 +177,7 @@ void DisplayScrollText2::draw(int64_t currentMicros) {
   if (currentMicros < startActiveMicros) return; // not yet active
 
   int64_t elapsed = currentMicros - lastScrollUpdateMicros;
-  int32_t pixelsToScroll = static_cast<u8g2_uint_t>(elapsed / onePixelDurationMicros);
+  int32_t pixelsToScroll = static_cast<int32_t>(elapsed / onePixelDurationMicros);
   if (1 <= pixelsToScroll) { // we only update the time reference if we actually scroll at least one pixel
     lastScrollUpdateMicros = currentMicros;
   }
@@ -199,6 +199,7 @@ void DisplayScrollText2::draw(int64_t currentMicros) {
   } while (x < Display::OLED_width);
 }
 
+// Efficient: pass current time in microseconds (recommended for controller loop)
 bool DisplayScrollText2::shouldRedraw(int64_t currentMicros) {
   if (status_ == _status::Expired) return false;       // expired
   if (currentMicros < startActiveMicros) return false; // not yet active
@@ -281,7 +282,7 @@ DisplayScrollText::~DisplayScrollText() {
   // No dynamic memory to free, but method provided for completeness
 }
 
-void DisplayScrollText::activate(unsigned long delayMs) {
+void DisplayScrollText::activate(unsigned int delayMs /* = 0 */) {
   if (line_.textWidth() < 1) return;
 
   status_ = _status::Active;
@@ -354,6 +355,7 @@ void DisplayScrollText::draw(int64_t currentMicros) {
   } while (x < Display::OLED_width);
 }
 
+// Efficient: pass current time in microseconds (recommended for controller loop)
 bool DisplayScrollText::shouldRedraw(int64_t currentMicros) {
   if (status_ == _status::Expired) return false;       // expired
   if (currentMicros < startActiveMicros) return false; // not yet active

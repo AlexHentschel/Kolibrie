@@ -19,10 +19,12 @@ ErrDisplay::ErrDisplay(U8G2 &display, const DisplayText &topBlinkingMessage, con
   bottomScroller_.activate();
 }
 
+// Convenience: calls esp_timer_get_time() internally (less efficient)
 void ErrDisplay::checkRedraw() {
   checkRedraw(esp_timer_get_time());
 }
 
+// Efficient: pass current time in microseconds (recommended for controller loop)
 void ErrDisplay::checkRedraw(int64_t currentMicros) {
   if (!shouldRedraw(currentMicros)) return;
 

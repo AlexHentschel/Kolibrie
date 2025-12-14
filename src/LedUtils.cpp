@@ -34,13 +34,13 @@ LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned
       highIsOn(highIsOn),
       toggler(lifetimeMs, toggleIntervalMs) {
   pinMode(pin, OUTPUT);
-  setLedOff();
+  setLedOff_();
 }
 
 // Efficient: pass current time in microseconds (recommended)
 void LEDExpiringToggler::checkToggleLED(int64_t currentMicros) {
   if (!toggler.checkToggle(currentMicros)) return;
-  toggleLED();
+  toggleLED_();
 }
 
 // Convenience: calls esp_timer_get_time() internally (less efficient)
@@ -48,15 +48,15 @@ void LEDExpiringToggler::checkToggleLED() {
   // we let the internal toggler call `esp_timer_get_time()` instead of _always_ calling it here,
   // because `toggler.checkToggle()` shortcuts the expensive `esp_timer_get_time()` call in various cases
   if (!toggler.checkToggle()) return;
-  toggleLED();
+  toggleLED_();
 }
 
-void LEDExpiringToggler::toggleLED() {
+void LEDExpiringToggler::toggleLED_() {
   // state has changed, so query new state and set LED accordingly
   if (toggler.isCurrentStateOn()) {
-    setLedOn();
+    setLedOn_();
   } else {
-    setLedOff();
+    setLedOff_();
   }
 }
 
@@ -69,12 +69,12 @@ void LEDExpiringToggler::activate(unsigned int delayMs /* = 0 */) {
 
 void LEDExpiringToggler::expire() {
   toggler.expire();
-  setLedOff();
+  setLedOff_();
 }
 
 bool LEDExpiringToggler::isExpired() { return toggler.isExpired(); }
 
-void LEDExpiringToggler::setLedOn() {
+void LEDExpiringToggler::setLedOn_() {
   if (highIsOn) {
     digitalWrite(pin, HIGH);
   } else {
@@ -82,7 +82,7 @@ void LEDExpiringToggler::setLedOn() {
   }
 }
 
-void LEDExpiringToggler::setLedOff() {
+void LEDExpiringToggler::setLedOff_() {
   if (highIsOn) {
     digitalWrite(pin, LOW);
   } else {

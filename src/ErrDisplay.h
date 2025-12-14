@@ -9,16 +9,26 @@
 class ErrDisplay {
 
   // CLASS ErrDisplay
-  // encapsulates the u8g2 display logic for displaying some error status on the on-board 72x40 OLED screen
+  //
+  // Encapsulates the u8g2 display logic for displaying some error status on the on-board 72x40 OLED screen.
   // This display provides two lines. The top line is intended to show some short static error summary, which will
   // be displayed as blinking. The bottom line is intended to show some more detailed error description, which will
-  // be scrolled if too long to fit on the display within the time of displayDurationMs.
+  // be scrolled if too long to fit on the display.
+  //
+  // Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+  // have the suffix 'Micros'.
+  //
+  // There are two checkRedraw() functions:
+  //   1. checkRedraw(int64_t currentMicros): efficient, takes current time in microseconds (recommended for controller loop)
+  //   2. checkRedraw(): convenience, but less efficient (calls esp_timer_get_time() internally)
+  //      For best performance, call esp_timer_get_time() once per loop and pass the value to all instances.
 
   public:
   ErrDisplay(U8G2 &display, const DisplayText &topBlinkingMessage, const DisplayText &bottomScrollingMessage, u8g2_uint_t scrollSpeedPxPerSec = 15); // constructor
 
   // checkRedraw is intended to be called with high frequency, e.g. by the controller `loop`. It re-draws the
   // the display only if data has changed since the last draw.
+  // Efficient: pass current time in microseconds (recommended for controller loop)
   void checkRedraw(int64_t currentMicros);
 
   // Convenience: calls esp_timer_get_time() internally (less efficient)
@@ -35,16 +45,4 @@ class ErrDisplay {
   DisplayScrollText bottomScroller_;
 
   bool shouldRedraw(int64_t currentMicros);
-
-  // State for scrolling text
-  int scrollXOffset = 0;            // current scroll offset in pixels
-  int scrollTextWidth = 0;          // width of the text in pixels
-  int scrollScreenWidth = 0;        // width of the display in pixels
-  int scrollSpeedPxPerSec = 20;     // scrolling speed in pixels per second (default 20)
-  int64_t lastScrollUpdateUs = 0;   // last update time in microseconds
-  String lastScrollText = "";       // last scrolled text
-  uint8_t lastScrollTextHeight = 0; // last used text height
-
-  // internal service methods
-  // Print a single line of text at a given y-offset, return updated y-offset for next line
 };

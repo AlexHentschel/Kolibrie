@@ -24,7 +24,7 @@ class PrintLifeSign {
   // and pass the value to all instances. The function without time input is less efficient, as it calls esp_timer_get_time() internally.
 
   public:
-  PrintLifeSign(int64_t lifetimeMs, unsigned int printIntervalMs, String message);
+  PrintLifeSign(int64_t lifetimeMs, unsigned int printIntervalMs, const String &message);
 
   // Efficient: pass current time in microseconds
   void checkConsolePrint(int64_t currentMicros);
@@ -37,6 +37,6 @@ class PrintLifeSign {
   bool isExpired();                        // returns true if life-sign printing is expired/disabled
 
   private:
-  FrequencyTrigger trigger;
-  const String message;
+  FrequencyTrigger trigger_;
+  const String message_;
 };

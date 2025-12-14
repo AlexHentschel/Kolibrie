@@ -218,6 +218,5 @@ class FrequencyToggler {
   bool isActive();                         // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
 
   private:
-  FrequencyToggler2 frequencyToggler2;
-  bool checkToggle_(int64_t currentMicros); // Internal: does not check expiry
+  FrequencyToggler2 frequencyToggler2_;
 };

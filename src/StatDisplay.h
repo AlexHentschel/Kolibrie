@@ -6,7 +6,17 @@
 class StatDisplay {
 
   // CLASS StatDisplay
-  // encapsulates the u8g2 display logic for displaying the system status on the on-board 72x40 OLED screen
+  //
+  // Encapsulates the u8g2 display logic for displaying the system status on the on-board 72x40 OLED screen.
+  //
+  // Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+  // have the suffix 'Micros'. Constructor takes milliseconds as input (unsigned int, with 'Ms' suffix) to reflect
+  // human-relevant time scales.
+  //
+  // There are two checkRedraw() functions:
+  //   1. checkRedraw(int64_t currentMicros): efficient, takes current time in microseconds (recommended for controller loop)
+  //   2. checkRedraw(): convenience, but less efficient (calls esp_timer_get_time() internally)
+  //      For best performance, call esp_timer_get_time() once per loop and pass the value to all instances.
 
   public:
   /**

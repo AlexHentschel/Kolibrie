@@ -30,6 +30,18 @@ namespace {
  *                                      CLASS StatDisplay                                         *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
+// Encapsulates the u8g2 display logic for displaying the system status on the on-board 72x40 OLED screen.
+//
+// Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+// have the suffix 'Micros'. Constructor takes milliseconds as input (unsigned int, with 'Ms' suffix) to reflect
+// human-relevant time scales.
+//
+// There are two checkRedraw() functions:
+//   1. checkRedraw(int64_t currentMicros): efficient, takes current time in microseconds (recommended for controller loop)
+//   2. checkRedraw(): convenience, but less efficient (calls esp_timer_get_time() internally)
+//      For best performance, call esp_timer_get_time() once per loop and pass the value to all instances.
+
+
 // Constructor
 StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, unsigned int heatingSymbolOffDurationMs)
     : display(display),
@@ -38,8 +50,8 @@ StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, 
 }
 
 void StatDisplay::setTemp(float temp) {
-  if (!isfinite(temp) || isnan(temp)) {
-    return; // Ignore invalid temperature values
+  if (!isfinite(temp)) {
+    return; // Ignore invalid temperature values (NaN, Inf, -Inf)
   }
   int newTemp;
   if (temp <= -99.0f) {
@@ -74,6 +86,7 @@ void StatDisplay::setWifiStatus(bool isConnected) {
   }
 }
 
+// Efficient: pass current time in microseconds (recommended for controller loop)
 void StatDisplay::checkRedraw(int64_t currentMicros) {
   if (!shouldRedraw(currentMicros)) return;
 
@@ -112,6 +125,7 @@ void StatDisplay::checkRedraw(int64_t currentMicros) {
   dataUpdated = false;
 }
 
+// Convenience: calls esp_timer_get_time() internally (less efficient)
 void StatDisplay::checkRedraw() {
   checkRedraw(esp_timer_get_time());
 }

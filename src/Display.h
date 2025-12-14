@@ -46,7 +46,8 @@ class DisplayText {
   const uint8_t *font() const { return font_; }
   const String string() const { return text_; }
   u8g2_uint_t getFontAscent() const { return fontAscent_; }
-  int textWidth() const { return textWidth_; }
+  // Returns signed int intentionally: scrolling logic requires negative comparisons (e.g., scrollXOffset < -textWidth)
+  int textWidth() const { return static_cast<int>(textWidth_); }
   unsigned int length() const;
 
   u8g2_uint_t getNextLineYOffset() const { return nextLineYOffset_; }
@@ -67,6 +68,10 @@ class DisplayText {
 // DisplayScrollText: Scroll a single line of text horizontally on the OLED.
 // Call redraw() once per loop for smooth scrolling. Does not clear or send the buffer.
 // All display and font parameters are precomputed for efficiency.
+//
+// Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+// have the suffix 'Micros'. The activate() function takes milliseconds as input (unsigned int, with 'Ms'
+// suffix) to reflect human-relevant time scales.
 class DisplayScrollText {
   public:
   // Construct a scrolling text line for the OLED display.
@@ -74,15 +79,14 @@ class DisplayScrollText {
   // @param line: text to scroll
   // @param yOffset: vertical offset (top of text block)
   // @param textHeight: font height (default 16)
-  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
+  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 15)
   DisplayScrollText(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight = 16, uint32_t scrollSpeedPxPerSec = 15);
 
   // Construct a scrolling text line for the OLED display.
   // @param display: U8G2 display reference
   // @param line: text to scroll
   // @param yOffset: vertical offset (top of text block)
-  // @param textHeight: font height (default 16)
-  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
+  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 15)
   DisplayScrollText(U8G2 &display, const DisplayText &line, u8g2_uint_t yOffset, uint32_t scrollSpeedPxPerSec = 15);
 
   // Get the y-offset for the next line below this text.
@@ -92,16 +96,18 @@ class DisplayScrollText {
   ~DisplayScrollText();
 
   // Lifecycle functions
-  void activate(unsigned long delayMs = 0); // activates the scroller (after optional delay [milliseconds])
-  void expire();                            // disables the scroller
-  bool isExpired() const;                   // returns true if the scroller is expired/disabled (inverse of `isActive()`)
-  bool isActive() const;                    // returns true if the scroller is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned int delayMs = 0); // activates the scroller (after optional delay [milliseconds])
+  void expire();                           // disables the scroller
+  bool isExpired() const;                  // returns true if the scroller is expired/disabled (inverse of `isActive()`)
+  bool isActive() const;                   // returns true if the scroller is active (irrespective whether the toggler's state is on or off)
 
-  // returns true if the display's content should be redrawn for this scrolling text. Call once per loop.
+  // Returns true if the display's content should be redrawn for this scrolling text. Call once per loop.
+  // Efficient: pass current time in microseconds (recommended for controller loop)
   bool shouldRedraw(int64_t currentMicros);
 
   // Update the display buffer for this scrolling text. Always draws the current state.
-  // Call once per loop after `shouldRedraw()` returned true. Or when other composed elements require a redraw.
+  // Call once per loop after `shouldRedraw(currentMicros)` returned true. Or when other composed elements require a redraw.
+  // Efficient: pass current time in microseconds (recommended for controller loop)
   void draw(int64_t currentMicros);
 
   private:
@@ -147,12 +153,16 @@ class DisplayScrollText {
 };
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
- *                                      CLASS DisplayScrollText                                   *
+ *                                      CLASS DisplayScrollText2                                  *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // DisplayScrollText: Scroll a single line of text horizontally on the OLED.
 // Call redraw() once per loop for smooth scrolling. Does not clear or send the buffer.
 // All display and font parameters are precomputed for efficiency.
+//
+// Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+// have the suffix 'Micros'. The activate() function takes milliseconds as input (unsigned int, with 'Ms'
+// suffix) to reflect human-relevant time scales.
 class DisplayScrollText2 {
   public:
   // Construct a scrolling text line for the OLED display.
@@ -160,15 +170,14 @@ class DisplayScrollText2 {
   // @param line: text to scroll
   // @param yOffset: vertical offset (top of text block)
   // @param textHeight: font height (default 16)
-  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
+  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 15)
   DisplayScrollText2(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight = 16, u8g2_uint_t scrollSpeedPxPerSec = 15);
 
   // Construct a scrolling text line for the OLED display.
   // @param display: U8G2 display reference
   // @param line: text to scroll
   // @param yOffset: vertical offset (top of text block)
-  // @param textHeight: font height (default 16)
-  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 20)
+  // @param scrollSpeedPxPerSec: scroll speed in px/sec (default 15)
   DisplayScrollText2(U8G2 &display, const DisplayText &line, u8g2_uint_t yOffset, u8g2_uint_t scrollSpeedPxPerSec = 15);
 
   // Get the y-offset for the next line below this text.
@@ -178,16 +187,18 @@ class DisplayScrollText2 {
   ~DisplayScrollText2();
 
   // Lifecycle functions
-  void activate(unsigned long delayMs = 0); // activates the scroller (after optional delay [milliseconds])
-  void expire();                            // disables the scroller
-  bool isExpired() const;                   // returns true if the scroller is expired/disabled (inverse of `isActive()`)
-  bool isActive() const;                    // returns true if the scroller is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned int delayMs = 0); // activates the scroller (after optional delay [milliseconds])
+  void expire();                           // disables the scroller
+  bool isExpired() const;                  // returns true if the scroller is expired/disabled (inverse of `isActive()`)
+  bool isActive() const;                   // returns true if the scroller is active (irrespective whether the toggler's state is on or off)
 
-  // returns true if the display's content should be redrawn for this scrolling text. Call once per loop.
+  // Returns true if the display's content should be redrawn for this scrolling text. Call once per loop.
+  // Efficient: pass current time in microseconds (recommended for controller loop)
   bool shouldRedraw(int64_t currentMicros);
 
   // Update the display buffer for this scrolling text. Always draws the current state.
-  // Call once per loop after `shouldRedraw()` returned true. Or when other composed elements require a redraw.
+  // Call once per loop after `shouldRedraw(currentMicros)` returned true. Or when other composed elements require a redraw.
+  // Efficient: pass current time in microseconds (recommended for controller loop)
   void draw(int64_t currentMicros);
 
   private:
@@ -204,7 +215,7 @@ class DisplayScrollText2 {
   U8G2 &display_;
   DisplayText line_;
   const u8g2_uint_t scrollSpeedPxPerSec_;
-  const int64_t onePixelDurationMicros = 0; // the duration in microseconds for one pixel scroll; formally inverse of scrollSpeedPxPerSec_
+  const int64_t onePixelDurationMicros; // the duration in microseconds for one pixel scroll; formally inverse of scrollSpeedPxPerSec_
   const u8g2_uint_t yOffset_;
 
   _status status_;           // only text with Non-Zero width can reach state active = true

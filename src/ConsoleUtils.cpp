@@ -14,14 +14,14 @@
 // and pass the value to all instances. The function without time input is less efficient, as it calls esp_timer_get_time() internally.
 
 // constructor:
-PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned int printIntervalMs, String message)
-    : trigger(lifetimeMs, printIntervalMs),
-      message(message) {}
+PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned int printIntervalMs, const String &message)
+    : trigger_(lifetimeMs, printIntervalMs),
+      message_(message) {}
 
 // Efficient: pass current time in microseconds
 void PrintLifeSign::checkConsolePrint(int64_t currentMicros) {
-  if (trigger.checkTrigger(currentMicros)) {
-    Serial.println(message);
+  if (trigger_.checkTrigger(currentMicros)) {
+    Serial.println(message_);
   }
 }
 
@@ -29,19 +29,19 @@ void PrintLifeSign::checkConsolePrint(int64_t currentMicros) {
 void PrintLifeSign::checkConsolePrint() {
   // we let the internal trigger call `esp_timer_get_time()` instead of _always_ calling it here,
   // because `trigger.checkTrigger()` shortcuts the expensive `esp_timer_get_time()` call in various cases
-  if (trigger.checkTrigger()) {
-    Serial.println(message);
+  if (trigger_.checkTrigger()) {
+    Serial.println(message_);
   }
 }
 
 void PrintLifeSign::activate(unsigned int delayMs /* = 0 */) {
-  trigger.activate(delayMs);
+  trigger_.activate(delayMs);
 }
 
 void PrintLifeSign::expire() {
-  trigger.expire();
+  trigger_.expire();
 }
 
 bool PrintLifeSign::isExpired() {
-  return trigger.isExpired();
+  return trigger_.isExpired();
 }

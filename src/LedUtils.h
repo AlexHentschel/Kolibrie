@@ -47,13 +47,10 @@ class LEDExpiringToggler {
   void expire();                           // disables the LED toggling
   bool isExpired();                        // returns true if LED toggling is expired/disabled
 
-  static const bool HIGH_IS_ON; // Indicates that GPIO state HIGH means LED is on
-  static const bool LOW_IS_ON;  // Indicates that GPIO state LOW means LED is on (modus operandi for build-in LEDs in Arduino Nano EPS32)
-
   private:
-  void toggleLED();
-  void setLedOn();
-  void setLedOff();
+  void toggleLED_();
+  void setLedOn_();
+  void setLedOff_();
 
   // behavioral parameters are lifetime-constants (provided at construction)
   const uint8_t pin;

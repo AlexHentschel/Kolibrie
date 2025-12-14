@@ -75,7 +75,9 @@ std::unique_ptr<FrequencyToggler> extLoadOnDisplayBlinker = nullptr;
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // prints life-signs to Serial console, unbounded runtime, print every 5000 milliseconds
-PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller alive");
+// Note: Static allocation avoids memory leak; object persists for application lifetime
+static PrintLifeSign consolePrintLifeSignInstance(-1, 5000, "Controller alive");
+PrintLifeSign *consolePrintLifeSign = &consolePrintLifeSignInstance;
 
 std::unique_ptr<DisplayScrollText> oledLine1Scroller = nullptr;
 std::unique_ptr<DisplayScrollText> oledLine1Scroller2 = nullptr;
@@ -173,10 +175,12 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   }
 
   /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks 1 times turning o1 second
+  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
+  delete blueToggler;
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // blinks 1 times turning o1 second
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler->activate();
@@ -190,7 +194,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   // - top line in 16 pt
   // - bottom line in 14 pt
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  int64_t startMicros = esp_timer_get_time();
+  int64_t localStartMicros = esp_timer_get_time();
   int64_t currentMicros = startMicros;
   String line1 = "AgCDEFG";
   DisplayText line2 = DisplayText(u8g2, "1T3q567", 16);
@@ -203,7 +207,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
     u8g2.sendBuffer(); // transfer internal memory to the display
 
     currentMicros = esp_timer_get_time();
-  } while (currentMicros - startMicros < 3000000);
+  } while (currentMicros - localStartMicros < 3000000);
 
   // oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
   // delay(5000);
@@ -220,7 +224,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   uint8_t textHeight2 = 18;
   oledLine1Scroller2 = std::make_unique<DisplayScrollText>(u8g2, "Hello World. ", y2, textHeight2, 15);
 
-  startMicros = esp_timer_get_time();
+  startMicros = esp_timer_get_time();  // Initialize global startMicros for loop() timing checks
   oledLine1Scroller->activate();
   oledLine1Scroller2->activate(2000);
 
@@ -235,8 +239,6 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
   int64_t currentMicros = esp_timer_get_time();
   if (oledLine1Scroller->shouldRedraw(currentMicros) || oledLine1Scroller2->shouldRedraw(currentMicros)) {
     u8g2.clearBuffer();
-    uint8_t y = 2;
-    uint8_t textHeight = 16;
     oledLine1Scroller->draw(currentMicros);
     oledLine1Scroller2->draw(currentMicros);
     u8g2.sendBuffer(); // transfer internal memory to the display
