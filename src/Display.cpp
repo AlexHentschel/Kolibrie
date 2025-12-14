@@ -100,115 +100,6 @@ DisplayText::DisplayText(U8G2 &display, const String &text, uint8_t textHeight) 
 unsigned int DisplayText::length() const { return text_.length(); }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
- *                                   CLASS DisplayScrollText2                                      *
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-
-// bound: enforce scroll speed limits in constructor
-static u8g2_uint_t clampScrollSpeed2(u8g2_uint_t scrollSpeedPxPerSec) {
-  if (scrollSpeedPxPerSec < 1) return 1;
-  if (scrollSpeedPxPerSec > Display::OLED_width) return Display::OLED_width;
-  return scrollSpeedPxPerSec;
-}
-
-static int64_t computeOnePixelDurationUs2_(u8g2_uint_t scrollSpeedPxPerSec) {
-  u8g2_uint_t s = clampScrollSpeed2(scrollSpeedPxPerSec);
-  return 1000000LL / static_cast<int64_t>(s);
-}
-
-DisplayScrollText2::DisplayScrollText2(U8G2 &display, const String &line, u8g2_uint_t yOffset, uint8_t textHeight, u8g2_uint_t scrollSpeedPxPerSec /* = 15 */)
-    : display_(display),
-      line_(display, line, textHeight),
-      yOffset_(yOffset),
-      scrollSpeedPxPerSec_(clampScrollSpeed2(scrollSpeedPxPerSec)),
-      onePixelDurationMicros(computeOnePixelDurationUs2_(scrollSpeedPxPerSec_)),
-      status_(_status::Expired),
-      scrollXOffset_(0),
-      lastScrollUpdateMicros(0) {
-  //
-}
-
-DisplayScrollText2::DisplayScrollText2(U8G2 &display, const DisplayText &line, u8g2_uint_t yOffset, u8g2_uint_t scrollSpeedPxPerSec /* = 15 */)
-    : display_(display),
-      line_(line),
-      yOffset_(yOffset),
-      scrollSpeedPxPerSec_(clampScrollSpeed2(scrollSpeedPxPerSec)),
-      onePixelDurationMicros(computeOnePixelDurationUs2_(scrollSpeedPxPerSec_)),
-      status_(_status::Expired),
-      scrollXOffset_(0),
-      lastScrollUpdateMicros(0) {
-  //
-}
-
-DisplayScrollText2::~DisplayScrollText2() {
-  // No dynamic memory to free, but method provided for completeness
-}
-
-void DisplayScrollText2::activate(unsigned int delayMs /* = 0 */) {
-  if (line_.textWidth() < 1) return;
-
-  status_ = _status::Active;
-  startActiveMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
-  lastScrollUpdateMicros = startActiveMicros;
-  scrollXOffset_ = 0;
-}
-
-void DisplayScrollText2::expire() {
-  if (status_ != _status::Expired)
-    status_ = _status::ShouldExpire;
-}
-
-bool DisplayScrollText2::isExpired() const { return !isActive(); }
-
-bool DisplayScrollText2::isActive() const { return status_ == _status::Active; }
-
-u8g2_uint_t DisplayScrollText2::getNextLineYOffset() const {
-  return yOffset_ + line_.getNextLineYOffset();
-}
-
-// draw always draws the current state of the scrolling text.
-// Internal function intended to be composed with checks whether a redraw is necessary.
-void DisplayScrollText2::draw(int64_t currentMicros) {
-  if (status_ > _status::Active) {
-    if (status_ == _status::ShouldExpire) {
-      status_ = _status::Expired;
-    }
-    return;
-  }
-  if (currentMicros < startActiveMicros) return; // not yet active
-
-  int64_t elapsed = currentMicros - lastScrollUpdateMicros;
-  int32_t pixelsToScroll = static_cast<int32_t>(elapsed / onePixelDurationMicros);
-  if (1 <= pixelsToScroll) { // we only update the time reference if we actually scroll at least one pixel
-    lastScrollUpdateMicros = currentMicros;
-  }
-  if (pixelsToScroll > scrollSpeedPxPerSec_) { // more than 1 second elapsed
-    pixelsToScroll = scrollSpeedPxPerSec_;     // limit to maximally one second worth of scrolling
-  }
-
-  scrollXOffset_ -= pixelsToScroll;
-  while (scrollXOffset_ < -line_.textWidth()) {
-    scrollXOffset_ += line_.textWidth();
-  }
-
-  int x = scrollXOffset_;
-  display_.setFont(line_.font());
-  display_.setBitmapMode(1); // helps with smoother scrolling (?)
-  do {
-    display_.drawUTF8(x, yOffset_ + line_.getFontAscent(), line_.c_str());
-    x += line_.textWidth();
-  } while (x < Display::OLED_width);
-}
-
-// Efficient: pass current time in microseconds (recommended for controller loop)
-bool DisplayScrollText2::shouldRedraw(int64_t currentMicros) {
-  if (status_ == _status::Expired) return false;       // expired
-  if (currentMicros < startActiveMicros) return false; // not yet active
-
-  int64_t elapsed = currentMicros - lastScrollUpdateMicros;
-  return (elapsed >= onePixelDurationMicros);
-};
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                   CLASS DisplayScrollText                                      *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
@@ -262,7 +153,7 @@ DisplayScrollText::DisplayScrollText(U8G2 &display, const String &line, u8g2_uin
       onePixelDurationMicros_(computeOnePixelDurationMicros_(scrollSpeedPixel_)),
       status_(_status::Expired),
       scrollXOffset_(0),
-      lastScrollUpdateMicros(0) {
+      lastScrollUpdateMicros_(0) {
   //
 }
 
@@ -274,7 +165,7 @@ DisplayScrollText::DisplayScrollText(U8G2 &display, const DisplayText &line, u8g
       onePixelDurationMicros_(computeOnePixelDurationMicros_(scrollSpeedPixel_)),
       status_(_status::Expired),
       scrollXOffset_(0),
-      lastScrollUpdateMicros(0) {
+      lastScrollUpdateMicros_(0) {
   //
 }
 
@@ -286,8 +177,8 @@ void DisplayScrollText::activate(unsigned int delayMs /* = 0 */) {
   if (line_.textWidth() < 1) return;
 
   status_ = _status::Active;
-  startActiveMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
-  lastScrollUpdateMicros = startActiveMicros;
+  startActiveMicros_ = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
+  lastScrollUpdateMicros_ = startActiveMicros_;
   scrollXOffset_ = 0;
 }
 
@@ -313,11 +204,11 @@ void DisplayScrollText::draw(int64_t currentMicros) {
     }
     return;
   }
-  if (currentMicros < startActiveMicros) return; // not yet active
+  if (currentMicros < startActiveMicros_) return; // not yet active
 
   // Calculate how many pixels to scroll based on `elapsed` time [microseconds] and speed (all integer math)
   // `scrollSpeedPixel_` denotes the pixels to be scrolled per sec, multiplied by 2^30 · 10^-6 = 1073.741824.
-  int64_t elapsed = currentMicros - lastScrollUpdateMicros;
+  int64_t elapsed = currentMicros - lastScrollUpdateMicros_;
   u8g2_uint_t pixelsToScroll;
   if (elapsed < onePixelDurationMicros_) {
     pixelsToScroll = 0;
@@ -325,13 +216,13 @@ void DisplayScrollText::draw(int64_t currentMicros) {
     // If more than 1 second has passed, only scroll by the pixels roughly corresponding to 1 second to avoid too large jumps.
     int64_t p = scrollSpeedPixel_ >> 10; // this corresponds to division by 1024, which differs from 1073.741824 by only 5% - close enough
     pixelsToScroll = static_cast<u8g2_uint_t>(p);
-    lastScrollUpdateMicros = currentMicros; // we only update the time reference if we actually scroll at least one pixel
+    lastScrollUpdateMicros_ = currentMicros; // we only update the time reference if we actually scroll at least one pixel
   } else {
     // This function has been called within less than 1 second => normal scrolling computation:
     // pixelsToScroll = (scrollSpeedPixel_ · elapsed) >> 30
     int64_t p = (scrollSpeedPixel_ * elapsed) >> 30;
     pixelsToScroll = static_cast<u8g2_uint_t>(p);
-    lastScrollUpdateMicros = currentMicros; // we only update the time reference if we actually scroll at least one pixel
+    lastScrollUpdateMicros_ = currentMicros; // we only update the time reference if we actually scroll at least one pixel
   }
 
   // compute the updated absolute xOffset of the scrolled text:
@@ -357,9 +248,9 @@ void DisplayScrollText::draw(int64_t currentMicros) {
 
 // Efficient: pass current time in microseconds (recommended for controller loop)
 bool DisplayScrollText::shouldRedraw(int64_t currentMicros) {
-  if (status_ == _status::Expired) return false;       // expired
-  if (currentMicros < startActiveMicros) return false; // not yet active
+  if (status_ == _status::Expired) return false;        // expired
+  if (currentMicros < startActiveMicros_) return false; // not yet active
 
-  int64_t elapsed = currentMicros - lastScrollUpdateMicros;
+  int64_t elapsed = currentMicros - lastScrollUpdateMicros_;
   return (elapsed >= onePixelDurationMicros_);
 };
