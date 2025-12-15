@@ -236,8 +236,8 @@ void DisplayScrollText::draw(int64_t currentMicros) {
   // numbers (e.g., in scrolling loops), as long as the underlying library version is up to date.
   int x = scrollXOffset_;
   display_.setFont(line_.font());
-  display_.setBitmapMode(1); // helps with smoother scrolling (?)
-  // display_.setFontMode(0);   // enable transparent mode, which is faster
+  // display_.setBitmapMode(1); // helps with smoother scrolling (?)
+  display_.setFontMode(0); // enable transparent mode, which is faster
   do {
     display_.drawUTF8(x, yOffset_ + line_.getFontAscent(), line_.c_str());
     x += line_.textWidth();

@@ -41,7 +41,6 @@ namespace {
 //   2. checkRedraw(): convenience, but less efficient (calls esp_timer_get_time() internally)
 //      For best performance, call esp_timer_get_time() once per loop and pass the value to all instances.
 
-
 // Constructor
 StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, unsigned int heatingSymbolOffDurationMs)
     : display(display),
@@ -98,12 +97,16 @@ void StatDisplay::checkRedraw(int64_t currentMicros) {
   int t = this->temp;
   if (t >= 0) {
     display.setFont(u8g2_font_logisoso30_tf); // same font as for "°C" symbol, hence do not use reduced font
+    display.setCursor(2, 34);
+    display.print(t);
   } else {
     // for negative temperatures, use smaller font to accommodate minus sign
-    display.setFont(u8g2_font_logisoso26_tn); // numbers-only font [ending "tn"]
+    display.setFont(u8g2_font_logisoso20_tn); // numbers-only font [ending "tn"]
+    display.setCursor(0, 28);
+    display.print("-");
+    display.setCursor(11, 30);
+    display.print(-t);
   }
-  display.setCursor(2, 34);
-  display.print(t);
 
   display.setFont(u8g2_font_logisoso30_tf); // need full font including special characters for '°' char
   display.drawUTF8(42, 40, "°");
@@ -131,7 +134,11 @@ void StatDisplay::checkRedraw() {
 }
 
 bool StatDisplay::shouldRedraw(int64_t currentMicros) {
-  if (dataUpdated) return true;
-  if (heatingStatusBlinker.checkToggle(currentMicros)) return true;
+  if (dataUpdated) {
+    return true;
+  }
+  if (heatingStatusBlinker.checkToggle(currentMicros)) {
+    return true;
+  }
   return false;
 }

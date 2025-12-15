@@ -69,23 +69,29 @@ void FrequencyTrigger::advanceState(int64_t currentMicros) {
     nextTriggerAtOrAfterMicros += triggerIntervalMicros;
     if (currentMicros < nextTriggerAtOrAfterMicros) return;
     int64_t accumulatedAdvanceMicros = triggerIntervalMicros;
-    /*
-      If we reach the following code, then the following holds:
-      • currentMicros >= nextTriggerAtOrAfterMicros, so we need to advance further
-      • accumulatedAdvanceMicros = triggerIntervalMicros.
-      We now attempt to advance by another triggerIntervalMicros. In total, we have then advanced by accumulatedAdvanceMicros = 2 * triggerIntervalMicros.
-      Subsequently, we attempt to add the updated accumulatedAdvanceMicros again, yielding a total advance of 4 * triggerIntervalMicros.
 
-      This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
-      by construction is guaranteed to be less than currentMicros. Then, we restart the process from the last point we have not overshot.
-    */
-    for (int64_t speculativeExponentialAdvanceMicros = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
-         currentMicros > speculativeExponentialAdvanceMicros;
-         accumulatedAdvanceMicros <<= 1) {
-      nextTriggerAtOrAfterMicros = speculativeExponentialAdvanceMicros;
+    // If we reach the following code, then the following holds:
+    // • currentMicros >= nextTriggerAtOrAfterMicros, so we need to advance further
+    // • accumulatedAdvanceMicros = triggerIntervalMicros.
+    // We now attempt to advance by another triggerIntervalMicros. In total, we have then advanced by accumulatedAdvanceMicros = 2 * triggerIntervalMicros.
+    // Subsequently, we attempt to add the updated accumulatedAdvanceMicros again, yielding a total advance of 4 * triggerIntervalMicros.
+    //
+    // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
+    // by construction is guaranteed to be less than currentMicros. Then, we restart the process from the last point we have not overshot.
+
+    int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
+    while (currentMicros > speculativeNextTrigger) {
+      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
+      nextTriggerAtOrAfterMicros = speculativeNextTrigger;
+
+      // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      accumulatedAdvanceMicros <<= 1;
+      speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }
+
     // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
-    // As our last speculative exponential step overshot, we now restart by adding the minimal increments.
+    // However, as our last speculative exponential step overshot, we now restart by adding the minimal increments.
   } while (true);
 }
 
@@ -233,12 +239,19 @@ void FrequencyToggler2::advanceState(int64_t currentMicros) {
     //
     // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
     // by construction is guaranteed to be less than currentMicros. Then, we restart the proceed from the last point we have not overshot.
-    for (int64_t speculativeExponentialAdvanceMicros = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
-         currentMicros > speculativeExponentialAdvanceMicros;
-         accumulatedAdvanceMicros <<= 1) {
-      nextTriggerAtOrAfterMicros = speculativeExponentialAdvanceMicros;
+
+    int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
+    while (currentMicros > speculativeNextTrigger) {
+      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
+      nextTriggerAtOrAfterMicros = speculativeNextTrigger;
+
+      // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      accumulatedAdvanceMicros <<= 1;
+      speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }
+
     // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
-    // As our last speculative exponential step overshot, we now restart by adding the minimal increments.
+    // However, as our last speculative exponential step overshot, we now restart by adding the minimal increments.
   } while (true);
 }
