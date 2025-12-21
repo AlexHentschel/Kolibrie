@@ -240,7 +240,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   oledLine1Scroller2 = std::make_unique<DisplayScrollText>(u8g2, "Hello World. ", y2, textHeight2, 15);
   // oledLine1Scroller2->activate(2000);
 
-  DisplayText headline = DisplayText(u8g2, " ERROR", 22);
+  DisplayText headline = DisplayText(u8g2, " ERROR", 20);
   DisplayText detailedMsg = DisplayText(u8g2, "detailed error message A 1 B 2 C 3 TL||||||``````", 18);
   errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 15);
 

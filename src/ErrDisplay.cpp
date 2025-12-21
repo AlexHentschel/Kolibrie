@@ -14,7 +14,7 @@ ErrDisplay::ErrDisplay(U8G2 &display, const DisplayText &topBlinkingMessage, con
       topBlinkingMessage_(topBlinkingMessage),
       topMessageBlinker_(FrequencyUtils::unbounded_lifetime, 700, 300),
       bottomScrollingMessage_(bottomScrollingMessage),
-      bottomScroller_(display_, bottomScrollingMessage_, topBlinkingMessage.getNextLineYOffset(), scrollSpeedPxPerSec) {
+      bottomScroller_(display_, bottomScrollingMessage_, topBlinkingMessage.getNextLineYOffset() + 4, scrollSpeedPxPerSec) {
   topMessageBlinker_.activate();
   bottomScroller_.activate();
 }
