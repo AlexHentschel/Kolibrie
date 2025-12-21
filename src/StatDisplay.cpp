@@ -1,11 +1,10 @@
-#include "StatDisplay.h"
 #include <Arduino.h>
 #include <U8g2lib.h>
 
-namespace {
-  constexpr int OLED_width = 72;
-  constexpr int OLED_height = 40;
+#include "Display.h"
+#include "StatDisplay.h"
 
+namespace {
   constexpr int epd_bitmap_wifi_width = 12;
   constexpr int epd_bitmap_wifi_height = 12;
 
@@ -31,15 +30,27 @@ namespace {
  *                                      CLASS StatDisplay                                         *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
+// Encapsulates the u8g2 display logic for displaying the system status on the on-board 72x40 OLED screen.
+//
+// Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
+// have the suffix 'Micros'. Constructor takes milliseconds as input (unsigned int, with 'Ms' suffix) to reflect
+// human-relevant time scales.
+//
+// There are two checkRedraw() functions:
+//   1. checkRedraw(int64_t currentMicros): efficient, takes current time in microseconds (recommended for controller loop)
+//   2. checkRedraw(): convenience, but less efficient (calls esp_timer_get_time() internally)
+//      For best performance, call esp_timer_get_time() once per loop and pass the value to all instances.
+
 // Constructor
-StatDisplay::StatDisplay(U8G2 &display, unsigned long heatingSymbolOnDurationMs, unsigned long heatingSymbolOffDurationMs)
+StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, unsigned int heatingSymbolOffDurationMs)
     : display(display),
-      extLoadOnDisplayBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs) {
+      heatingStatusBlinker(FrequencyUtils::unbounded_lifetime, heatingSymbolOnDurationMs, heatingSymbolOffDurationMs),
+      temp(0), wifiConnected(false), dataUpdated(false) {
 }
 
 void StatDisplay::setTemp(float temp) {
-  if (!isfinite(temp) || !isnan(temp)) {
-    return; // Ignore invalid temperature values
+  if (!isfinite(temp)) {
+    return; // Ignore invalid temperature values (NaN, Inf, -Inf)
   }
   int newTemp;
   if (temp <= -99.0f) {
@@ -57,13 +68,13 @@ void StatDisplay::setTemp(float temp) {
 }
 
 void StatDisplay::setHeatingStatus(bool isOn) {
-  if (extLoadOnDisplayBlinker.isActive() == isOn) return; // no state change
+  if (heatingStatusBlinker.isActive() == isOn) return; // no state change
   dataUpdated = true;
 
   if (isOn) {
-    extLoadOnDisplayBlinker.activate();
+    heatingStatusBlinker.activate();
   } else {
-    extLoadOnDisplayBlinker.expire();
+    heatingStatusBlinker.expire();
   }
 }
 
@@ -74,35 +85,36 @@ void StatDisplay::setWifiStatus(bool isConnected) {
   }
 }
 
-void StatDisplay::checkRedraw() {
-  display.clearBuffer();                            // clear the internal memory
-  display.drawFrame(0, 0, OLED_width, OLED_height); // draw a frame around the border
-  display.setBitmapMode(1);
+// Efficient: pass current time in microseconds (recommended for controller loop)
+void StatDisplay::checkRedraw(int64_t currentMicros) {
+  if (!shouldRedraw(currentMicros)) return;
+
+  display.clearBuffer();                                              // clear the internal memory
+  display.drawFrame(0, 0, Display::OLED_width, Display::OLED_height); // draw a frame around the border
+  display.setBitmapMode(1);                                           // this helps with transparent drawing of bitmap backgrounds
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌----╌╌╌╌ Temperature ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   int t = this->temp;
   if (t >= 0) {
     display.setFont(u8g2_font_logisoso30_tf); // same font as for "°C" symbol, hence do not use reduced font
-    // convert this->temp to string and draw
-    // char tempStr[4]; // integer
-    // snprintf(tempStr, sizeof(tempStr), "%d", this->temp);
-    // display.drawUTF8(2, 34, tempStr);
-
-    // display.setCursor(2, 34);
-    // display.print(this->temp);
+    display.setCursor(2, 34);
+    display.print(t);
   } else {
-    display.setFont(u8g2_font_logisoso26_tn); // numbers-only font [ending "tn"]
+    // for negative temperatures, use smaller font to accommodate minus sign
+    display.setFont(u8g2_font_logisoso20_tn); // numbers-only font [ending "tn"]
+    display.setCursor(0, 28);
+    display.print("-");
+    display.setCursor(11, 30);
+    display.print(-t);
   }
-  display.setCursor(2, 34);
-  display.print(t);
 
-  display.setFont(u8g2_font_logisoso30_tf);
+  display.setFont(u8g2_font_logisoso30_tf); // need full font including special characters for '°' char
   display.drawUTF8(42, 40, "°");
-  display.setFont(u8g2_font_logisoso18_tf);
+  display.setFont(u8g2_font_logisoso18_tr); // font containing letters only [ending "tr"]
   display.drawUTF8(54, 22, "C");
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Blinking heating symbol ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  if ((extLoadOnDisplayBlinker.isActive()) && (extLoadOnDisplayBlinker.isCurrentStateOn())) {
+  if (heatingStatusBlinker.isCurrentStateOn()) {
     display.drawXBMP(37, 15, epd_bitmap_flash_width, epd_bitmap_flash_height, epd_bitmap_flash);
   }
 
@@ -111,13 +123,22 @@ void StatDisplay::checkRedraw() {
     display.drawXBMP(55, 25, epd_bitmap_wifi_width, epd_bitmap_wifi_height, epd_bitmap_wifi);
   }
 
-  dataUpdated = false;
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ lifecycle ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   display.sendBuffer();
+  dataUpdated = false;
 }
 
-bool StatDisplay::shouldRedraw() {
-  if (dataUpdated) return true;
-  if (extLoadOnDisplayBlinker.checkToggle()) return true;
+// Convenience: calls esp_timer_get_time() internally (less efficient)
+void StatDisplay::checkRedraw() {
+  checkRedraw(esp_timer_get_time());
+}
 
+bool StatDisplay::shouldRedraw(int64_t currentMicros) {
+  if (dataUpdated) {
+    return true;
+  }
+  if (heatingStatusBlinker.checkToggle(currentMicros)) {
+    return true;
+  }
   return false;
-};
+}

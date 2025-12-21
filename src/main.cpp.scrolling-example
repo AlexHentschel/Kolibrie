@@ -15,7 +15,6 @@
 #include "Display.h"
 #include "FrequentlyUtils.h"
 #include "LedUtils.h"
-#include "StatDisplay.h"
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
@@ -56,7 +55,7 @@ std::unique_ptr<FrequencyTrigger> readTriggerTemperature = nullptr;
 #define BLUE_LED_BUILTIN 8 // GPIO 8, Blue LED: LOW = on, HIGH = off
 
 // LED Blinking patterns to indicate current state
-LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning 1 second
+LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning o1 second
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -71,16 +70,35 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning 1 second
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
 LEDExpiringToggler *extLoadToggler = nullptr;
 
+// Toggler for blinking the "heating symbol" on the OLED screen when the external load is active
+// Char 'flash-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 20x20 pixels
+#define epd_bitmap_flash_width 20
+#define epd_bitmap_flash_height 20
+const unsigned char epd_bitmap_flash[] PROGMEM = {
+    0x00, 0x0E, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x07, 0x00, 0x80, 0x07, 0x00,
+    0xC0, 0x03, 0x00, 0xC0, 0x7F, 0x00, 0xE0, 0x3F, 0x00, 0x40, 0x3E, 0x00,
+    0x00, 0x1C, 0x00, 0x00, 0x1E, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x0E, 0x00,
+    0x40, 0x2F, 0x00, 0xE0, 0x3F, 0x00, 0xC0, 0x1F, 0x00, 0xC0, 0x0F, 0x00,
+    0xC0, 0x07, 0x00, 0x80, 0x03, 0x00, 0x80, 0x01, 0x00, 0x80, 0x00, 0x00};
+
+// Wify symbol for display on OLED screen when wifi internet connection is active
+// Char `rss-8x.png' from the Open Iconic font https://github.com/iconic/open-iconic, down-scaled to 12x12 pixels
+#define epd_bitmap_wifi_width 12
+#define epd_bitmap_wifi_height 12
+const unsigned char epd_bitmap_wifi[] PROGMEM = {
+    0x80, 0x07, 0xE0, 0x03, 0x30, 0x00, 0x18, 0x07, 0xCC, 0x03, 0x66, 0x00,
+    0x32, 0x06, 0x93, 0x03, 0x9B, 0x00, 0xDB, 0x0E, 0x49, 0x0E, 0x00, 0x0E};
+
+// Array of all bitmaps for convenience. (Total bytes used to store images in PROGMEM = 96)
+const int epd_bitmap_allArray_LEN = 1;
+const unsigned char *epd_bitmap_allArray[1] = {epd_bitmap_flash};
+
 std::unique_ptr<FrequencyToggler> extLoadOnDisplayBlinker = nullptr;
 
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // prints life-signs to Serial console, unbounded runtime, print every 5000 milliseconds
-// Note: Static allocation avoids memory leak; object persists for application lifetime
-static PrintLifeSign consolePrintLifeSignInstance(FrequencyUtils::unbounded_lifetime, 5000, "Controller alive");
-PrintLifeSign *consolePrintLifeSign = &consolePrintLifeSignInstance;
-
-std::unique_ptr<StatDisplay> statDisplay = nullptr;
+PrintLifeSign *consolePrintLifeSign = new PrintLifeSign(-1, 5000, "Controller alive");
 
 std::unique_ptr<DisplayScrollText> oledLine1Scroller = nullptr;
 std::unique_ptr<DisplayScrollText> oledLine1Scroller2 = nullptr;
@@ -110,20 +128,12 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
+  u8g2.setContrast(1);      // set contrast to maximum
   u8g2.setBusClock(400000); // 400kHz I2C
 
   u8g2.enableUTF8Print();
   u8g2.setFont(u8g2_font_logisoso30_tf); // set the target font to calculate the pixel width
   u8g2.setFontMode(0);                   // enable transparent mode, which is faster
-
-  // contrast (i.e. brightness) on OLED displays is controlled by the current supplied to the organic light-emitting diodes.
-  // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
-  u8g2.setContrast(3); // set contrast to maximum
-
-  statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
-  statDisplay->setHeatingStatus(true);
-  // statDisplay->setWifiStatus(true);
-  statDisplay->setTemp(-88.52);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   Serial.print(F("Scanning for OneWire devices on GPIO pin "));
@@ -172,8 +182,8 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
     Serial.println(F(" bits."));
   }
 
-  readTriggerTemperature = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
-  extLoadOnDisplayBlinker = std::make_unique<FrequencyToggler>(FrequencyUtils::unbounded_lifetime, 500u); // blinks every 500ms when activated
+  readTriggerTemperature = std::make_unique<FrequencyTrigger>(-1, 5000); // read temperature every 2s, unbounded lifetime
+  extLoadOnDisplayBlinker = std::make_unique<FrequencyToggler>(-1, 500); // blinks every 500ms when activated
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
@@ -186,12 +196,10 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   }
 
   /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
-  delete blueToggler;
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks 1 times turning o1 second
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // blinks 1 times turning o1 second
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler->activate();
@@ -205,7 +213,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   // - top line in 16 pt
   // - bottom line in 14 pt
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  int64_t localStartMicros = esp_timer_get_time();
+  int64_t startMicros = esp_timer_get_time();
   int64_t currentMicros = startMicros;
   String line1 = "AgCDEFG";
   DisplayText line2 = DisplayText(u8g2, "1T3q567", 16);
@@ -218,7 +226,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
     u8g2.sendBuffer(); // transfer internal memory to the display
 
     currentMicros = esp_timer_get_time();
-  } while (currentMicros - localStartMicros < 500000);
+  } while (currentMicros - startMicros < 3000000);
 
   // oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
   // delay(5000);
@@ -235,11 +243,11 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   uint8_t textHeight2 = 18;
   oledLine1Scroller2 = std::make_unique<DisplayScrollText>(u8g2, "Hello World. ", y2, textHeight2, 15);
 
+  startMicros = esp_timer_get_time();
   oledLine1Scroller->activate();
   oledLine1Scroller2->activate(2000);
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!"));
-  startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -248,37 +256,28 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
 void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   int64_t currentMicros = esp_timer_get_time();
-  statDisplay->checkRedraw(currentMicros);
+  if (oledLine1Scroller->shouldRedraw(currentMicros) || oledLine1Scroller2->shouldRedraw(currentMicros)) {
+    u8g2.clearBuffer();
+    uint8_t y = 2;
+    uint8_t textHeight = 16;
+    oledLine1Scroller->draw(currentMicros);
+    oledLine1Scroller2->draw(currentMicros);
+    u8g2.sendBuffer(); // transfer internal memory to the display
+  }
 
-  if ((currentMicros - startMicros > 10000000) && (testStateCounter == 0)) {
-    statDisplay->setHeatingStatus(false);
-    statDisplay->setTemp(1.23);
-    Serial.println(F("transitioning 1 -> 2"));
+  currentMicros = esp_timer_get_time();
+  if ((currentMicros - startMicros > 5000000) && (testStateCounter == 0)) {
+    oledLine1Scroller->expire();
+    oledLine1Scroller2->expire();
     testStateCounter = 1;
   }
 
-  if ((currentMicros - startMicros > 20000000) && (testStateCounter == 1)) {
-    statDisplay->setWifiStatus(false);
-    statDisplay->setTemp(-17.1);
-    Serial.println(F("transitioning 2 -> 3"));
+  currentMicros = esp_timer_get_time();
+  if ((currentMicros - startMicros > 7000000) && (testStateCounter == 1)) {
+    oledLine1Scroller->activate(3500);
+    oledLine1Scroller2->activate();
     testStateCounter = 2;
   }
-
-  if ((currentMicros - startMicros > 30000000) && (testStateCounter == 2)) {
-    statDisplay->setWifiStatus(true);
-    statDisplay->setTemp(-3.4);
-    Serial.println(F("transitioning 3 -> 4"));
-    testStateCounter = 3;
-  }
-
-  if ((currentMicros - startMicros > 40000000) && (testStateCounter == 3)) {
-    statDisplay->setHeatingStatus(true);
-    statDisplay->setTemp(-0.4);
-    Serial.println(F("transitioning 4 -> 5"));
-    testStateCounter = 4;
-  }
-
-  consolePrintLifeSign->checkConsolePrint(currentMicros);
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */

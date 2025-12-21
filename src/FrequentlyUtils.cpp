@@ -2,6 +2,11 @@
 #include <cstdint>     // For int64_t
 #include <esp_timer.h> // For esp_timer_get_time()
 
+// TODO: !!
+// Integer divisions are slow. This file now uses microseconds for all internal time bookkeeping, avoiding division by 1000.
+// Constructors and activate() still take milliseconds for compatibility, but all internal logic is in microseconds.
+// For best performance, call esp_timer_get_time() once per controller loop and pass the value to all check...() calls.
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                    CLASS FrequencyTrigger                                      *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -9,48 +14,93 @@
 // It is intended to run on the controller loop, consuming minimal resources.
 
 // constructor:
-FrequencyTrigger::FrequencyTrigger(int64_t lifetimeMs, unsigned long triggerIntervalMs)
-    : lifetimeMs(lifetimeMs),
-      triggerIntervalMs(static_cast<int64_t>(triggerIntervalMs)),
-      lastActivationObservedMilli(0),
-      nextTriggerAtOrAfterMilli(0),
+
+FrequencyTrigger::FrequencyTrigger(int64_t lifetimeMs, unsigned int triggerIntervalMs)
+    : lifetimeMicros((lifetimeMs < 0LL) ? -1LL : lifetimeMs * 1000LL),
+      triggerIntervalMicros(static_cast<int64_t>(triggerIntervalMs) * 1000LL),
+      lastActivationObservedMicros(0),
+      nextTriggerAtOrAfterMicros(0),
       expired(true) // start as expired/disabled
 {}
 
+bool FrequencyTrigger::checkTrigger(int64_t currentMicros) {
+  if (expired) return false;
+  return checkTrigger_(currentMicros);
+}
+
+// Less efficient: calls esp_timer_get_time() internally
 bool FrequencyTrigger::checkTrigger() {
   if (expired) return false;
-  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
-  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
+  return checkTrigger_(esp_timer_get_time());
+}
 
+bool FrequencyTrigger::checkTrigger_(int64_t currentMicros) {
+  int64_t sinceActivation = currentMicros - lastActivationObservedMicros;
   // If the lifetime has expired, mark as expired and return false.
-  // note: negative lifetimeMs means no expiration
-  if ((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) {
+  // note: negative lifetimeMicros means no expiration
+  if ((lifetimeMicros >= 0LL) && (sinceActivation > lifetimeMicros)) {
     expired = true;
     return false;
   }
-
   // within lifetime, but still before next trigger time: nothing to do
-  if (currentMillis < nextTriggerAtOrAfterMilli) {
+  if (currentMicros < nextTriggerAtOrAfterMicros) {
     return false;
   }
-
   // we reached or exceeded the next trigger time:
   // • schedule next trigger time, skip missed intervals
   // • and return true
-  nextTriggerAtOrAfterMilli += triggerIntervalMs;
-  while (currentMillis >= nextTriggerAtOrAfterMilli) {
-    nextTriggerAtOrAfterMilli += triggerIntervalMs;
-  }
+  advanceState(currentMicros);
   return true;
 }
 
-void FrequencyTrigger::activate(long delayMs /* = 0 */) {
-  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
-  expired = false;
+// advances the internal threshold `nextTriggerAtOrAfterMilli` for next state change.
+// The algorithm effectively fast-forwards through missed intervals.
+// After `advanceState` returns, the `nextTriggerAtOrAfterMilli` is set to the closest _upcoming_
+// time had the algorithm be run more frequently. The implementation efficiently handles large time
+// jumps δ (eg. when the controller loop is busy) requiring only O(log(δ)) operations.
+//
+// Note: According to https://github.com/wled/WLED/issues/4206
+// integer divisions, especially 64bit ones can be very slow on microcontrollers (ESP32 S2, S3, C3).
+// Therefore, we avoid the integer division and instead utilize a heuristic that is very fast on the
+// most common usage pattern of no missed intervals, and still efficient (O(log(δ))) for large jumps δ.
+void FrequencyTrigger::advanceState(int64_t currentMicros) {
+  if (currentMicros < nextTriggerAtOrAfterMicros) return;
+  do {
+    nextTriggerAtOrAfterMicros += triggerIntervalMicros;
+    if (currentMicros < nextTriggerAtOrAfterMicros) return;
+    int64_t accumulatedAdvanceMicros = triggerIntervalMicros;
 
+    // If we reach the following code, then the following holds:
+    // • currentMicros >= nextTriggerAtOrAfterMicros, so we need to advance further
+    // • accumulatedAdvanceMicros = triggerIntervalMicros.
+    // We now attempt to advance by another triggerIntervalMicros. In total, we have then advanced by accumulatedAdvanceMicros = 2 * triggerIntervalMicros.
+    // Subsequently, we attempt to add the updated accumulatedAdvanceMicros again, yielding a total advance of 4 * triggerIntervalMicros.
+    //
+    // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
+    // by construction is guaranteed to be less than currentMicros. Then, we restart the process from the last point we have not overshot.
+
+    int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
+    while (currentMicros > speculativeNextTrigger) {
+      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
+      nextTriggerAtOrAfterMicros = speculativeNextTrigger;
+
+      // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      accumulatedAdvanceMicros <<= 1;
+      speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
+    }
+
+    // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
+    // However, as our last speculative exponential step overshot, we now restart by adding the minimal increments.
+  } while (true);
+}
+
+void FrequencyTrigger::activate(unsigned int delayMs /* = 0 */) {
+  if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
+  lastActivationObservedMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
+  expired = false;
   // trigger on next call to `checkTrigger()` (after `delayMs` milliseconds)
-  nextTriggerAtOrAfterMilli = lastActivationObservedMilli;
+  nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
 }
 
 void FrequencyTrigger::expire() { expired = true; }
@@ -64,17 +114,17 @@ bool FrequencyTrigger::isExpired() { return expired; }
 // specified time intervals.
 
 // constructor:
-FrequencyToggler::FrequencyToggler(int64_t lifetimeMs, unsigned long triggerIntervalMs)
-    : frequencyToggler2(lifetimeMs, triggerIntervalMs, triggerIntervalMs) {
-}
+FrequencyToggler::FrequencyToggler(int64_t lifetimeMs, unsigned int toggleIntervalMs)
+    : frequencyToggler2_(lifetimeMs, toggleIntervalMs, toggleIntervalMs) {}
 
-bool FrequencyToggler::checkToggle() { return frequencyToggler2.checkToggle(); }
-bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2.isCurrentStateOn(); }
+bool FrequencyToggler::checkToggle(int64_t currentMicros) { return frequencyToggler2_.checkToggle(currentMicros); }
+bool FrequencyToggler::checkToggle() { return frequencyToggler2_.checkToggle(); }
+bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2_.isCurrentStateOn(); }
 
-void FrequencyToggler::expire() { frequencyToggler2.expire(); }
-void FrequencyToggler::activate(long delayMs /* = 0 */) { frequencyToggler2.activate(delayMs); }
-bool FrequencyToggler::isExpired() { return frequencyToggler2.isExpired(); }
-bool FrequencyToggler::isActive() { return frequencyToggler2.isActive(); }
+void FrequencyToggler::expire() { frequencyToggler2_.expire(); }
+void FrequencyToggler::activate(unsigned int delayMs /* = 0 */) { frequencyToggler2_.activate(delayMs); }
+bool FrequencyToggler::isExpired() { return frequencyToggler2_.isExpired(); }
+bool FrequencyToggler::isActive() { return frequencyToggler2_.isActive(); }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                    CLASS FrequencyToggler2                                     *
@@ -89,25 +139,34 @@ bool FrequencyToggler::isActive() { return frequencyToggler2.isActive(); }
 //  * ACTIVE_ON: the toggler is active and in the ON state
 
 // constructor:
-FrequencyToggler2::FrequencyToggler2(int64_t lifetimeMs, unsigned long toggleDurationOnMs, unsigned long toggleDurationOffMs)
-    : lifetimeMs(lifetimeMs),
-      toggleDurationOnMs(static_cast<int64_t>(toggleDurationOnMs)),
-      toggleDurationOffMs(static_cast<int64_t>(toggleDurationOffMs)),
+
+FrequencyToggler2::FrequencyToggler2(int64_t lifetimeMs, unsigned int toggleDurationOnMs, unsigned int toggleDurationOffMs)
+    : lifetimeMicros((lifetimeMs < 0LL) ? -1LL : lifetimeMs * 1000LL),
+      toggleDurationOnMicros(static_cast<int64_t>(toggleDurationOnMs) * 1000LL),
+      toggleDurationOffMicros(static_cast<int64_t>(toggleDurationOffMs) * 1000LL),
       status(_status::Expired),
       stateIsOn(false),
-      lastActivationObservedMilli(0),
-      nextTriggerAtOrAfterMilli(0) {
+      lastActivationObservedMicros(0),
+      nextTriggerAtOrAfterMicros(0) {}
+
+bool FrequencyToggler2::checkToggle(int64_t currentMicros) {
+  if (status >= 2) return false;
+  return checkToggle_(currentMicros);
 }
 
+// Less efficient: calls esp_timer_get_time() internally
 bool FrequencyToggler2::checkToggle() {
   if (status >= 2) return false;
-  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
-  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
+  return checkToggle_(esp_timer_get_time());
+}
 
-  // If the lifetime has expired, mark as expired and return false.
-  // note: negative lifetimeMs means no expiration
-  if (((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) || (status == _status::ShouldExpire)) {
-    // we only want to toggle, if the current state is "on" when the lifetime expires
+bool FrequencyToggler2::checkToggle_(int64_t currentMicros) {
+  int64_t sinceActivation = currentMicros - lastActivationObservedMicros;
+  // If the lifetime has expired, mark as expired and inform the caller whether the state has changed from on->off.
+  // note: negative lifetimeMicros means no expiration
+  if (((lifetimeMicros >= 0LL) && (sinceActivation > lifetimeMicros)) || (status == _status::ShouldExpire)) {
+    // We only want to toggle, if the current state is "on" when the lifetime expires.
+    // Otherwise, we just quietly remain in the off state, but set out internal state to expired.
     bool sendToggleSignal = stateIsOn;
     status = _status::Expired;
     stateIsOn = false;
@@ -115,14 +174,14 @@ bool FrequencyToggler2::checkToggle() {
   }
 
   // within lifetime, but still before next trigger time: nothing to do
-  if (currentMillis < nextTriggerAtOrAfterMilli) {
+  if (currentMicros < nextTriggerAtOrAfterMicros) {
     return false;
   }
 
   // we reached or exceeded the next trigger time:
   // • schedule next trigger time, skip missed intervals
   // • and return true
-  advanceState(currentMillis);
+  advanceState(currentMicros);
   return true;
 }
 
@@ -130,13 +189,13 @@ bool FrequencyToggler2::isCurrentStateOn() {
   return stateIsOn;
 }
 
-void FrequencyToggler2::activate(long delayMs /* = 0 */) {
-  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
+void FrequencyToggler2::activate(unsigned int delayMs /* = 0 */) {
+  if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
+  lastActivationObservedMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
   status = _status::Active;
 
   // trigger on next call to `checkTrigger()` (after `delayMs` milliseconds)
-  nextTriggerAtOrAfterMilli = lastActivationObservedMilli;
+  nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
 }
 
 void FrequencyToggler2::expire() {
@@ -148,38 +207,51 @@ bool FrequencyToggler2::isExpired() { return !isActive(); }
 
 bool FrequencyToggler2::isActive() { return status == _status::Active; }
 
-void FrequencyToggler2::advanceState(int64_t currentMillis) {
-  if (currentMillis < nextTriggerAtOrAfterMilli) return;
-
+// advances the internal threshold `nextTriggerAtOrAfterMilli` for next state change.
+// The algorithm effectively fast-forwards through missed intervals, toggling the state accordingly.
+// After `advanceState` returns, the `nextTriggerAtOrAfterMilli` is set to the closest _upcoming_
+// toggle time. The implementation efficiently handles large time jumps δ (eg. when the controller
+// loop is busy) requiring only O(log(δ)) operations.
+//
+// Note: According to https://github.com/wled/WLED/issues/4206
+// integer divisions, especially 64bit ones can be very slow on microcontrollers (ESP32 S2, S3, C3).
+// Therefore, we avoid the integer division and instead utilize a heuristic that is very fast on the
+// most common usage pattern of no missed intervals, and still efficient (O(log(δ))) for large jumps δ.
+void FrequencyToggler2::advanceState(int64_t currentMicros) {
+  if (currentMicros < nextTriggerAtOrAfterMicros) return;
   do {
-    int64_t accumulatedAdvanceMs = 0LL;
-
+    int64_t accumulatedAdvanceMicros = 0LL;
     for (int i = 0; i < 2; i++) {
       stateIsOn = !stateIsOn; // updated state; persists for the respective toggle duration
-      int64_t deltaMs = stateIsOn ? toggleDurationOnMs : toggleDurationOffMs;
-      nextTriggerAtOrAfterMilli += deltaMs;
-      accumulatedAdvanceMs += deltaMs;
-      if (currentMillis < nextTriggerAtOrAfterMilli) return;
+      int64_t deltaMicros = stateIsOn ? toggleDurationOnMicros : toggleDurationOffMicros;
+      nextTriggerAtOrAfterMicros += deltaMicros;
+      accumulatedAdvanceMicros += deltaMicros;
+      if (currentMicros < nextTriggerAtOrAfterMicros) return;
     }
+
     // If we reach the following code, then the following holds:
-    // • currentMillis >= nextTriggerAtOrAfterMilli, so we need to advance further
+    // • currentMicros >= nextTriggerAtOrAfterMicros, so we need to advance further
     // • we have toggled twice, i.e. the value of `stateIsOn` is where it started
-    //   and we accumulatedAdvanceMs = toggleDurationOnMs + toggleDurationOffMs.
+    //   and we accumulatedAdvanceMicros = toggleDurationOnMicros + toggleDurationOffMicros.
     // We now attempt to advance by another two toggles in one step, leaving the boolean status of `stateIsOn` invariant. In total,
-    // we have then advanced by accumulatedAdvanceMs = 2 * (toggleDurationOnMs + toggleDurationOffMs). Subsequently, we attempt to
-    // add the updated accumulatedAdvanceMs again, yielding a total updated advance of 4 * (toggleDurationOnMs + toggleDurationOffMs).
+    // we have then advanced by accumulatedAdvanceMicros = 2 * (toggleDurationOnMicros + toggleDurationOffMicros). Subsequently, we attempt to
+    // add the updated accumulatedAdvanceMicros again, yielding a total advance of 4 * (toggleDurationOnMicros + toggleDurationOffMicros).
     //
     // This is an exponential growth, which eventually is going to overshoot. We remember the value before the last advancement, which
-    // by construction is guaranteed to be less than currentMillis. Then, we restart the proceed from the start.
+    // by construction is guaranteed to be less than currentMicros. Then, we restart the proceed from the last point we have not overshot.
 
-    for (int64_t speculativeExponentialAdvanceMs = nextTriggerAtOrAfterMilli + accumulatedAdvanceMs;
-         currentMillis > speculativeExponentialAdvanceMs;
-         accumulatedAdvanceMs <<= 1) {
-      nextTriggerAtOrAfterMilli = speculativeExponentialAdvanceMs;
+    int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
+    while (currentMicros > speculativeNextTrigger) {
+      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
+      nextTriggerAtOrAfterMicros = speculativeNextTrigger;
+
+      // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      accumulatedAdvanceMicros <<= 1;
+      speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }
 
-    // At this point, we _always_ have currentMillis  <= nextTriggerAtOrAfterMilli, so we sill need to advance further.
-    // However, as our last exponential step overshot, we now restart again by adding the minimal increments
-
+    // At this point, we have currentMicros >= nextTriggerAtOrAfterMicros, so we may still need to advance further.
+    // However, as our last speculative exponential step overshot, we now restart by adding the minimal increments.
   } while (true);
 }

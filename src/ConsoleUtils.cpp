@@ -5,53 +5,43 @@
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
  *                                     CLASS PrintLifeSign                                        *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
 // This class prints a life-sign message to the Serial console at specified intervals.
 // It is intended to run on the controller loop, consuming minimal resources.
+// All internal time bookkeeping is done in microseconds for efficiency. All variables representing time
+// have the suffix 'Micros'. Constructors and activate() take milliseconds as input (unsigned int, with 'Ms' suffix)
+// to reflect human-relevant time scales. For best performance, call esp_timer_get_time() once per controller loop
+// and pass the value to all instances. The function without time input is less efficient, as it calls esp_timer_get_time() internally.
 
 // constructor:
-PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned long printIntervalMs, String message)
-    : lifetimeMs(lifetimeMs),
-      printIntervalMs(static_cast<int64_t>(printIntervalMs)),
-      message(message),
-      lastActivationObservedMilli(0),
-      nextPrintAtOrAfterMilli(0),
-      expired(true) // start as expired/disabled
-{}
+PrintLifeSign::PrintLifeSign(int64_t lifetimeMs, unsigned int printIntervalMs, const String &message)
+    : trigger_(lifetimeMs, printIntervalMs),
+      message_(message) {}
 
+// Efficient: pass current time in microseconds
+void PrintLifeSign::checkConsolePrint(int64_t currentMicros) {
+  if (trigger_.checkTrigger(currentMicros)) {
+    Serial.println(message_);
+  }
+}
+
+// Convenience: calls esp_timer_get_time() internally (less efficient)
 void PrintLifeSign::checkConsolePrint() {
-  if (expired) return;
-  int64_t currentMillis = esp_timer_get_time() / 1000LL; // convert microseconds returned by `esp_timer_get_time()` to milliseconds
-  int64_t sinceActivation = currentMillis - lastActivationObservedMilli;
-
-  // If the lifetime has expired, mark as expired and return (without printing).
-  // note: negative lifetimeMs means no expiration
-  if ((lifetimeMs >= 0LL) && (sinceActivation > lifetimeMs)) {
-    expired = true;
-    return;
-  }
-
-  // within lifetime, but still before next trigger time: nothing to do
-  if (currentMillis < nextPrintAtOrAfterMilli) {
-    return;
-  }
-
-  // if we have reached or exceeded the next trigger time, then print message and schedule next print
-  Serial.println(message);
-  nextPrintAtOrAfterMilli += printIntervalMs;        // schedule next print time
-  while (currentMillis >= nextPrintAtOrAfterMilli) { // skip missed intervals
-    nextPrintAtOrAfterMilli += printIntervalMs;
+  // we let the internal trigger call `esp_timer_get_time()` instead of _always_ calling it here,
+  // because `trigger.checkTrigger()` shortcuts the expensive `esp_timer_get_time()` call in various cases
+  if (trigger_.checkTrigger()) {
+    Serial.println(message_);
   }
 }
 
-void PrintLifeSign::activate(long delayMs /* = 0 */) {
-  if (lifetimeMs == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMilli = esp_timer_get_time() / 1000LL + static_cast<int64_t>(delayMs);
-  expired = false;
-
-  // print on next call to `checkConsolePrint()` (after `delayMs` milliseconds)
-  nextPrintAtOrAfterMilli = lastActivationObservedMilli;
+void PrintLifeSign::activate(unsigned int delayMs /* = 0 */) {
+  trigger_.activate(delayMs);
 }
 
-void PrintLifeSign::expire() { expired = true; }
+void PrintLifeSign::expire() {
+  trigger_.expire();
+}
 
-bool PrintLifeSign::isExpired() { return expired; }
+bool PrintLifeSign::isExpired() {
+  return trigger_.isExpired();
+}
