@@ -13,7 +13,6 @@
 // Custom utils
 #include "ConsoleUtils.h"
 #include "Display.h"
-#include "ErrDisplay.h"
 #include "FrequentlyUtils.h"
 #include "LedUtils.h"
 #include "StatDisplay.h"
@@ -85,8 +84,6 @@ std::unique_ptr<StatDisplay> statDisplay = nullptr;
 
 std::unique_ptr<DisplayScrollText> oledLine1Scroller = nullptr;
 std::unique_ptr<DisplayScrollText> oledLine1Scroller2 = nullptr;
-
-std::unique_ptr<ErrDisplay> errDisplay = nullptr;
 
 int64_t startMicros = 0;
 int testStateCounter = 0;
@@ -233,14 +230,13 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   y = 2;
   uint8_t textHeight = 15;
   oledLine1Scroller = std::make_unique<DisplayScrollText>(u8g2, text1, y, textHeight, 20);
-  // oledLine1Scroller->activate();
 
   uint8_t y2 = oledLine1Scroller->getNextLineYOffset() + 6;
   uint8_t textHeight2 = 18;
   oledLine1Scroller2 = std::make_unique<DisplayScrollText>(u8g2, "Hello World. ", y2, textHeight2, 15);
-  // oledLine1Scroller2->activate(2000);
 
-  errDisplay = std::make_unique<ErrDisplay>(u8g2, "ERR", "test error message", 15);
+  oledLine1Scroller->activate();
+  oledLine1Scroller2->activate(2000);
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!"));
   startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
