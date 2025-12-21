@@ -97,6 +97,28 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   Serial.begin(115200);
   delay(1000);
 
+  Serial.println(F("Hello, blink blink blink ;-)\n"));
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  // STARTUP BLINKER:: signals is starting up
+  // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
+  { // stack allocated (no heap fragmentation):
+    LEDExpiringToggler startupBlinker(BLUE_LED_BUILTIN, 750, 150, LedUtils::LOW_IS_ON);
+    startupBlinker.activate();
+    while (true) {
+      delay(5);
+      startupBlinker.checkToggleLED();
+      if (startupBlinker.isExpired()) break;
+    }
+  } // startupBlinker on stack automatically destroyed here when leaving scope
+
+  /* ── LEDs' blinking patterns to indicate current state ─────────── */
+  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
+
+  /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
+
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
@@ -109,34 +131,12 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
   u8g2.setContrast(3); // set contrast to maximum
 
-  Serial.println(F("Hello"));
-
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  
-  
-  
+
   initTemperatureSensor();
   readTriggerTemperature = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LedUtils::LOW_IS_ON);
-  blueToggler->activate();
-  while (true) {
-    delay(20);
-    blueToggler->checkToggleLED();
-    if (blueToggler->isExpired()) break;
-  }
-
-  /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
-  delete blueToggler;
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
-
-  /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
-
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
   statDisplay->setHeatingStatus(false);
@@ -239,21 +239,21 @@ void printDeviceAddress(const DeviceAddress address) {
 
 /* initTemperatureSensor scans the the OneWire and attempts to connect to the DS18B20 temperature sensor,
  * which is expected to be the only device on the bus. We verify the device is a compatible temperature
- * sensor by checking its address family code.
+ * sensor by checking its address family code. In case of any unexpected conditions, this function will
+ * print an error message to the Serial console, print an error on the OLED display, and halt execution.
  *
- * CAQUTION: this function reads and writes (intention: initialization) globally defined variables:
+ * CAUTION: this function reads and writes (intention: initialization) globally defined variables:
  *  • The sensor is initialized with the precision defined by the `TEMPERATURE_PRECISION` constant.
+ *    Currently: 0.25°C resolution requiring 187.5 ms measurement duration
  *  • The address of the sensor is stored in the global variable `tempSensorDeviceAddress`.
  *
- * select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
- * and after a few sanity checks,
  */
 void initTemperatureSensor() {
   Serial.print(F("Scanning for OneWire devices on GPIO pin "));
   Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
   DeviceAddress tempSensorDeviceAddress; // type definition for DS18B20 address (8 bytes), provided by DallasTemperature library
 
-  // scan for connected devices on the OneWire bus:
+  // STEP 1: scan for connected devices on the OneWire bus:
   uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress);
   if (deviceCount != 1) {
     while (true) {
@@ -263,22 +263,35 @@ void initTemperatureSensor() {
       delay(5000);
     }
   }
-  Serial.print(F("Assuming last detected device with address "));
+
+  // STEP 2: Pre-Init Sanity Checks that the device is supported by the DallasTemperature driver:
+  Serial.print(F("Verifying that sensor at address "));
   printDeviceAddress(tempSensorDeviceAddress);
-  Serial.println(F(" to be the expected DS18B20 temperature sensor\n"));
+  Serial.println(F(" is supported by the DallasTemperature driver."));
 
-  // if (!(temperatureSensors.validAddress(tempSensorDeviceAddress))) { // confirm that the address is valid
-  //   Serial.print(F("ERROR: incompatible temperature sensor at address "));
-  //   printDeviceAddress(tempSensorDeviceAddress);
-  //   Serial.println();
-  // }
-  // if (!(temperatureSensors.validFamily(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
-  //   Serial.print(F("ERROR: incompatible temperature family at address "));
-  //   printDeviceAddress(tempSensorDeviceAddress);
-  //   Serial.println();
-  // }
+  if (!(temperatureSensors.validAddress(tempSensorDeviceAddress))) { // confirm that the address is valid
+    Serial.print(F("ERROR: incompatible device address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println();
+    Serial.println(F("Halting execution."));
+  }
+  if (!(temperatureSensors.validFamily(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
+    Serial.print(F("ERROR: unknown device type at address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println();
+    Serial.println(F("Halting execution."));
+  }
 
+  // STEP 3: Init Temperature Sensor
   temperatureSensors.begin(); // Initialise the sensor.
+
+  // STEP 4: Post-Init Sanity Checks on the connected DS18B20 temperature sensor:
+  if (!(temperatureSensors.isConnected(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
+    Serial.print(F("ERROR: despite sensor initialization, the sensor at address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println(F(" is reported to be disconnected."));
+    Serial.println(F("Halting execution."));
+  }
 
   // Check that sensor is not reporting parasite power mode, which would not be expected and likely a symptom of some defect
   if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
@@ -303,21 +316,31 @@ void initTemperatureSensor() {
     Serial.print(F(" to desired precision of "));
     Serial.print(TEMPERATURE_PRECISION, DEC);
     Serial.println(F(" bits."));
-    Serial.println(F("Sensor reports precision of "));
+    Serial.print(F("Sensor reports precision of "));
     Serial.print(actualPrecision, DEC);
     Serial.println(F(" bits."));
   }
+
+  // Happy path
+  Serial.print(F("Sensor operating with precision of "));
+  Serial.print(actualPrecision, DEC);
+  Serial.print(F(" bits. Current temperature: "));
+  printTemperature(temperatureSensors, tempSensorDeviceAddress);
+  Serial.println();
+  Serial.println(F("DS18B20 temperature sensor successfully initialized"));
+  Serial.println();
 }
 
 // function to print the temperature for a device
 void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
-    Serial.println("Error: Could not read temperature data");
+    Serial.println();
+    Serial.println(F("ERROR: Could not read temperature data"));
     return;
   }
-  Serial.print("Temp C: ");
   Serial.print(tempC);
-  Serial.print(" Temp F: ");
+  Serial.print(F(" C / "));
   Serial.print(DallasTemperature::toFahrenheit(tempC));
+  Serial.print(F(" F"));
 }
