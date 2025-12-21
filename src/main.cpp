@@ -31,17 +31,6 @@ U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 // U8G2_R2 180 degree clockwise rotation
 // U8G2_R3 270 degree clockwise rotation
 
-int width = 72;
-int height = 40;
-int xOffset = 28; // = (132-w)/2
-int yOffset = 24; // = (64-h)/2
-
-const char DEG_SYM[] = {0xB0, '\0'};
-
-const unsigned int text1_y0 = 34, text2_y0 = 66;
-const char *text1 = "Bunny Happyness ";             // scroll this text from right to left
-const char *text2 = "The Cat Sleeps well tonight "; // scroll this text from right to left
-
 /* DS18B20 Temperature Sensor
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 #define TEMPERATURE_SENSOR_GPIO 2 // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
@@ -49,7 +38,6 @@ const char *text2 = "The Cat Sleeps well tonight "; // scroll this text from rig
 OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 DallasTemperature temperatureSensors(&temperatureSensorBus);
 
-DeviceAddress tempSensorDeviceAddress; // type definition for DS18B20 address (8 bytes), provided by DallasTemperature library
 std::unique_ptr<FrequencyTrigger> readTriggerTemperature = nullptr;
 
 /* LEDs
@@ -71,8 +59,6 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning 1 second
 
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
 LEDExpiringToggler *extLoadToggler = nullptr;
-
-std::unique_ptr<FrequencyToggler> extLoadOnDisplayBlinker = nullptr;
 
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -98,6 +84,7 @@ int testStateCounter = 0;
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 void printDeviceAddress(const DeviceAddress address);
 void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress);
+void initTemperatureSensor();
 
 // void oledPrintTwoLines(U8G2 &display, const char *line1, const char *line2, uint8_t textHeight = 16);
 // uint8_t oledScrollText(U8G2 &display, const String &text, uint8_t yOffset, uint8_t textHeight /* = 16 */, uint16_t scrollSpeedMs /* = 50 */);
@@ -110,91 +97,51 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   Serial.begin(115200);
   delay(1000);
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  Serial.println(F("Hello, blink blink blink ;-)\n"));
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  // STARTUP BLINKER:: signals is starting up
+  // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
+  { // stack allocated (no heap fragmentation):
+    LEDExpiringToggler startupBlinker(BLUE_LED_BUILTIN, 750, 150, LedUtils::LOW_IS_ON);
+    startupBlinker.activate();
+    while (true) {
+      delay(5);
+      startupBlinker.checkToggleLED();
+      if (startupBlinker.isExpired()) break;
+    }
+  } // startupBlinker on stack automatically destroyed here when leaving scope
+
+  /* ── LEDs' blinking patterns to indicate current state ─────────── */
+  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
+  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
+
+  /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
+  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
   u8g2.setBusClock(400000); // 400kHz I2C
 
   u8g2.enableUTF8Print();
-  u8g2.setFont(u8g2_font_logisoso30_tf); // set the target font to calculate the pixel width
-  u8g2.setFontMode(0);                   // enable transparent mode, which is faster
+  u8g2.setFontMode(0); // enable transparent mode, which is faster
 
   // contrast (i.e. brightness) on OLED displays is controlled by the current supplied to the organic light-emitting diodes.
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
   u8g2.setContrast(3); // set contrast to maximum
 
-  statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
-  statDisplay->setHeatingStatus(true);
-  // statDisplay->setWifiStatus(true);
-  statDisplay->setTemp(-88.52);
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  Serial.print(F("Scanning for OneWire devices on GPIO pin "));
-  Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
-
-  uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress); // scan for connected DS18B20 devices
-  if (deviceCount != 1) {
-    while (true) {
-      Serial.print(F("Error: Expected exactly 1 DS18B20 device, but found "));
-      Serial.print(deviceCount, DEC);
-      Serial.println(F(" devices. Halting execution."));
-      delay(5000);
-    }
-  }
-  Serial.print(F("Assuming last detected device with address "));
-  printDeviceAddress(tempSensorDeviceAddress);
-  Serial.println(F(" to be the expected DS18B20 temperature sensor\n"));
-
-  temperatureSensors.begin(); // Initialise the sensor.
-
-  // Check that sensor is not reporting parasite power mode, which would not be expected and likely a symptom of some defect
-  if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
-    Serial.print(F("WARNING: DS18B20 temperature sensor "));
-    printDeviceAddress(tempSensorDeviceAddress);
-    Serial.println(F(" is reporting PARASITE POWER MODE. This is unexpected and may indicate a defect."));
-  }
-
-  // set the temperature accuracy
-  // Note on `skipGlobalBitResolutionCalculation` parameter:
-  // When skipGlobalBitResolutionCalculation is set to true, the function will only set the resolution for the targeted device and will not recalculate or update the overall (global) bit
-  // resolution for all devices on the bus. This can be useful for performance reasons or when you want to manage device resolutions individually without affecting the global setting.
-  // Conversely, if skipGlobalBitResolutionCalculation is false, the function will update the global bit resolution variable after successfully setting the device's resolution. It will als
-  // scan all devices to ensure the global bit resolution reflects the highest resolution among all connected sensors. This ensures consistency when reading temperatures from multiple devices.
-  temperatureSensors.setResolution(tempSensorDeviceAddress, TEMPERATURE_PRECISION);
-
-  // verify resolution setting:
-  uint8_t actualPrecision = temperatureSensors.getResolution(tempSensorDeviceAddress);
-  if (actualPrecision != TEMPERATURE_PRECISION) {
-    Serial.print(F("Error: Unable to set DS18B20 temperature sensor "));
-    printDeviceAddress(tempSensorDeviceAddress);
-    Serial.print(F(" to desired precision of "));
-    Serial.print(TEMPERATURE_PRECISION, DEC);
-    Serial.println(F(" bits."));
-    Serial.println(F("Sensor reports precision of "));
-    Serial.print(actualPrecision, DEC);
-    Serial.println(F(" bits."));
-  }
-
+  initTemperatureSensor();
   readTriggerTemperature = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
-  extLoadOnDisplayBlinker = std::make_unique<FrequencyToggler>(FrequencyUtils::unbounded_lifetime, 500u); // blinks every 500ms when activated
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  // blinks quickly every 300ms for a total duration of 1.35s to indicate system is starting up
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1350, 150, LedUtils::LOW_IS_ON);
-  blueToggler->activate();
-  while (true) {
-    delay(20);
-    blueToggler->checkToggleLED();
-    if (blueToggler->isExpired()) break;
-  }
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
-  /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
-  delete blueToggler;
-  blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
-
-  /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
+  statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
+  statDisplay->setHeatingStatus(false);
+  statDisplay->setWifiStatus(false);
+  statDisplay->setTemp(-88.52);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   blueToggler->activate();
@@ -202,47 +149,6 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 
   consolePrintLifeSign->activate(293);
   readTriggerTemperature->activate(421);
-  extLoadOnDisplayBlinker->activate(421);
-
-  // line print demonstration
-  // - top line in 16 pt
-  // - bottom line in 14 pt
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  int64_t localStartMicros = esp_timer_get_time();
-  int64_t currentMicros = startMicros;
-  String line1 = "AgCDEFG";
-  DisplayText line2 = DisplayText(u8g2, "1T3q567", 16);
-  u8g2_uint_t y;
-  do {
-    u8g2.clearBuffer();
-    y = 2;
-    y = Display::oledPrintSingleLine(u8g2, line1, y, 14);
-    y = Display::oledPrintSingleLine(u8g2, line2, y);
-    u8g2.sendBuffer(); // transfer internal memory to the display
-
-    currentMicros = esp_timer_get_time();
-  } while (currentMicros - localStartMicros < 500000);
-
-  // oledScrollText(u8g2, "Done with setup. Kolibrie commencing operations!", 20, 10);
-  // delay(5000);
-
-  // line print scroll demonstration
-  // - top line in 15 pt
-  // - bottom line in 18 pt
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  y = 2;
-  uint8_t textHeight = 15;
-  oledLine1Scroller = std::make_unique<DisplayScrollText>(u8g2, text1, y, textHeight, 20);
-  // oledLine1Scroller->activate();
-
-  uint8_t y2 = oledLine1Scroller->getNextLineYOffset() + 6;
-  uint8_t textHeight2 = 18;
-  oledLine1Scroller2 = std::make_unique<DisplayScrollText>(u8g2, "Hello World. ", y2, textHeight2, 15);
-  // oledLine1Scroller2->activate(2000);
-
-  DisplayText headline = DisplayText(u8g2, " ERROR", 22);
-  DisplayText detailedMsg = DisplayText(u8g2, "detailed error message A 1 B 2 C 3 TL||||||``````", 18);
-  errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 15);
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!"));
   startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
@@ -255,7 +161,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
 void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   int64_t currentMicros = esp_timer_get_time();
 
-  errDisplay->checkRedraw(currentMicros);
+  // errDisplay->checkRedraw(currentMicros);
 
   // statDisplay->checkRedraw(currentMicros);
 
@@ -295,6 +201,8 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
 /* ...
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ DS18B20 Temperature Sensor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
 // Scan for devices on the OneWire bus.
 // • prints addresses of detected devices to Serial console
 // • writes the address of the LAST DEVICE found to `tempSensorDeviceAddress`
@@ -327,15 +235,112 @@ void printDeviceAddress(const DeviceAddress address) {
   }
 }
 
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+
+/* initTemperatureSensor scans the the OneWire and attempts to connect to the DS18B20 temperature sensor,
+ * which is expected to be the only device on the bus. We verify the device is a compatible temperature
+ * sensor by checking its address family code. In case of any unexpected conditions, this function will
+ * print an error message to the Serial console, print an error on the OLED display, and halt execution.
+ *
+ * CAUTION: this function reads and writes (intention: initialization) globally defined variables:
+ *  • The sensor is initialized with the precision defined by the `TEMPERATURE_PRECISION` constant.
+ *    Currently: 0.25°C resolution requiring 187.5 ms measurement duration
+ *  • The address of the sensor is stored in the global variable `tempSensorDeviceAddress`.
+ *
+ */
+void initTemperatureSensor() {
+  Serial.print(F("Scanning for OneWire devices on GPIO pin "));
+  Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
+  DeviceAddress tempSensorDeviceAddress; // type definition for DS18B20 address (8 bytes), provided by DallasTemperature library
+
+  // STEP 1: scan for connected devices on the OneWire bus:
+  uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress);
+  if (deviceCount != 1) {
+    while (true) {
+      Serial.print(F("ERROR: Expected exactly 1 DS18B20 device, but found "));
+      Serial.print(deviceCount, DEC);
+      Serial.println(F(" devices. Halting execution."));
+      delay(5000);
+    }
+  }
+
+  // STEP 2: Pre-Init Sanity Checks that the device is supported by the DallasTemperature driver:
+  Serial.print(F("Verifying that sensor at address "));
+  printDeviceAddress(tempSensorDeviceAddress);
+  Serial.println(F(" is supported by the DallasTemperature driver."));
+
+  if (!(temperatureSensors.validAddress(tempSensorDeviceAddress))) { // confirm that the address is valid
+    Serial.print(F("ERROR: incompatible device address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println();
+    Serial.println(F("Halting execution."));
+  }
+  if (!(temperatureSensors.validFamily(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
+    Serial.print(F("ERROR: unknown device type at address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println();
+    Serial.println(F("Halting execution."));
+  }
+
+  // STEP 3: Init Temperature Sensor
+  temperatureSensors.begin(); // Initialise the sensor.
+
+  // STEP 4: Post-Init Sanity Checks on the connected DS18B20 temperature sensor:
+  if (!(temperatureSensors.isConnected(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
+    Serial.print(F("ERROR: despite sensor initialization, the sensor at address "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println(F(" is reported to be disconnected."));
+    Serial.println(F("Halting execution."));
+  }
+
+  // Check that sensor is not reporting parasite power mode, which would not be expected and likely a symptom of some defect
+  if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
+    Serial.print(F("WARNING: DS18B20 temperature sensor "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.println(F(" is reporting PARASITE POWER MODE. This is unexpected and may indicate a defect."));
+  }
+
+  // set the temperature accuracy
+  // Note on `skipGlobalBitResolutionCalculation` parameter:
+  // When skipGlobalBitResolutionCalculation is set to true, the function will only set the resolution for the targeted device and will not recalculate or update the overall (global) bit
+  // resolution for all devices on the bus. This can be useful for performance reasons or when you want to manage device resolutions individually without affecting the global setting.
+  // Conversely, if skipGlobalBitResolutionCalculation is false, the function will update the global bit resolution variable after successfully setting the device's resolution. It will als
+  // scan all devices to ensure the global bit resolution reflects the highest resolution among all connected sensors. This ensures consistency when reading temperatures from multiple devices.
+  temperatureSensors.setResolution(tempSensorDeviceAddress, TEMPERATURE_PRECISION);
+
+  // verify resolution setting:
+  uint8_t actualPrecision = temperatureSensors.getResolution(tempSensorDeviceAddress);
+  if (actualPrecision != TEMPERATURE_PRECISION) {
+    Serial.print(F("Error: Unable to set DS18B20 temperature sensor "));
+    printDeviceAddress(tempSensorDeviceAddress);
+    Serial.print(F(" to desired precision of "));
+    Serial.print(TEMPERATURE_PRECISION, DEC);
+    Serial.println(F(" bits."));
+    Serial.print(F("Sensor reports precision of "));
+    Serial.print(actualPrecision, DEC);
+    Serial.println(F(" bits."));
+  }
+
+  // Happy path
+  Serial.print(F("Sensor operating with precision of "));
+  Serial.print(actualPrecision, DEC);
+  Serial.print(F(" bits. Current temperature: "));
+  printTemperature(temperatureSensors, tempSensorDeviceAddress);
+  Serial.println();
+  Serial.println(F("DS18B20 temperature sensor successfully initialized"));
+  Serial.println();
+}
+
 // function to print the temperature for a device
 void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
-    Serial.println("Error: Could not read temperature data");
+    Serial.println();
+    Serial.println(F("ERROR: Could not read temperature data"));
     return;
   }
-  Serial.print("Temp C: ");
   Serial.print(tempC);
-  Serial.print(" Temp F: ");
+  Serial.print(F(" C / "));
   Serial.print(DallasTemperature::toFahrenheit(tempC));
+  Serial.print(F(" F"));
 }
