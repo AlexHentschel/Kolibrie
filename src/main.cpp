@@ -18,6 +18,9 @@
 #include "LedUtils.h"
 #include "StatDisplay.h"
 
+// Preprocessor Macros
+#define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
 #include "WiFiCredentials.h"
@@ -86,16 +89,14 @@ void printDeviceAddress(const DeviceAddress address);
 void printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress);
 void initTemperatureSensor();
 
-// void oledPrintTwoLines(U8G2 &display, const char *line1, const char *line2, uint8_t textHeight = 16);
-// uint8_t oledScrollText(U8G2 &display, const String &text, uint8_t yOffset, uint8_t textHeight /* = 16 */, uint16_t scrollSpeedMs /* = 50 */);
-// uint8_t oledPrintSingleLine(U8G2 &display, const String &line, uint8_t yOffset, uint8_t textHeight /* = 16 */);
-
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 void setup() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   Serial.begin(115200);
-  delay(1000);
+#if defined(DEBUG)
+  delay(1000); // provide some time for Monitor to connect
+#endif
 
   Serial.println(F("Hello, blink blink blink ;-)\n"));
 
@@ -113,7 +114,6 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   } // startupBlinker on stack automatically destroyed here when leaving scope
 
   /* ── LEDs' blinking patterns to indicate current state ─────────── */
-  // Reuse the same toggler instance with new configuration (avoiding memory leak from prior allocation)
   blueToggler = new LEDExpiringToggler(BLUE_LED_BUILTIN, -1, 2000, LedUtils::LOW_IS_ON); // blinks every 2 seconds
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
