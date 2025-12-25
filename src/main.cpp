@@ -88,7 +88,7 @@ int testStateCounter = 0;
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 float initTemperatureSensor();
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress);
+float printTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
 void printDeviceAddress(const DeviceAddress address);
@@ -127,6 +127,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   tempMeasurementSuccess = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1200, 500, 200, LedUtils::LOW_IS_ON);
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
+  // TODO
   extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
@@ -156,12 +157,11 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   consolePrintLifeSign->activate(293);
 
-  triggerReadTemp->activate();
-
+  triggerReadTemp->activate(2207);
   tempMeasurementSuccess->activate();
-  extLoadToggler->activate();
 
-  triggerReadTemp->activate(421);
+  // TODO: remove
+  extLoadToggler->activate();
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
   startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
@@ -412,22 +412,25 @@ float initTemperatureSensor() {
   return tempC;
 }
 
-// printTemperature
-// • measured the temperature,
-// • prints the temperature to Serial console in units of Celsius and Fahrenheit
-// • in case of error (e.g., sensor disconnected), an error message is printed instead
-// • returns the temperature in Celsius as float; in case of error, NaN is returned
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
+// printTemp
+// • measures the temperature,
+// • sanity-checks that the received value is finite and in the expected range of the sensor
+// • prints the temperature to Serial console in units of Celsius only
+// • in case of error (e.g., sensor disconnected), an error message is printed to the console
+//   and the ErrDisplay is activated, halting further execution.
+// Returns: the temperature in Celsius as float; in case of error, NaN is returned
+float printTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
-  if (tempC == DEVICE_DISCONNECTED_C) {
-    Serial.println();
-    Serial.println(F("ERROR: reading temperature failed with value "));
-    return NAN;
+  if ((tempC == DEVICE_DISCONNECTED_C) || !isfinite(tempC)) {
+    String errorMsg = String(F(" Reading Temperature from DS18B20 sensor failed, received value ")) + String(tempC);
+    displayErrorAndHalt(errorMsg);
   }
+
+  // The following console prints use constant string literals living in RAM. No heap allocation happens here, i.e. no risk of memory
+  // fragmentation. On purpose, we do NOT use Program-Memory strings here, because the slow retrieval time would slow down the controller's hot path.
+  Serial.print("Current temp: ");
   Serial.print(tempC);
-  Serial.print(F(" C / "));
-  Serial.print(DallasTemperature::toFahrenheit(tempC));
-  Serial.print(F(" F"));
+  Serial.print(" C");
   return tempC;
 }
 
