@@ -39,7 +39,7 @@ class LEDExpiringToggler {
   public:
   // Constructor with separate on/off durations: all time arguments in milliseconds (unsigned int, with 'Ms' suffix)
   LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned int toggleDurationOnMs, unsigned int toggleDurationOffMs, bool highIsOn);
-  
+
   // Constructor with single interval (backward compatibility with LEDExpiringToggler): sets both on and off durations to the same value
   LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned int toggleIntervalMs, bool highIsOn);
 
