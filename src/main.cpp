@@ -53,7 +53,7 @@ LEDExpiringToggler *tempMeasurementSuccess = nullptr; // blinks 5 times turning 
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-// EXT_LOAD_SWITCH defines the GPIO that is used to controll an external load attached.
+// EXT_LOAD_SWITCH defines the GPIO that is used to control an external load attached.
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
 // power or not. Here, the micro-controller's GPIO (3.3V) controls the external load, but
 // through an IRL530 Power Mosfet, supplying 5V trigger to a Solid-State-Relay switching AC mains.
@@ -222,7 +222,7 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
 
 // Display error message on both Serial console and OLED, then halt execution.
 // It is recommended to start the error message with a leading blank. This helps when scrolling text,
-// providing a space betwen the line leaving the display and the repeated message scrolling into the display.
+// providing a space between the line leaving the display and the repeated message scrolling into the display.
 void displayErrorAndHalt(const String &errorMessage) {
   // Print to Serial console
   Serial.println();
@@ -268,7 +268,7 @@ uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressO
 // function to print a OneWire device address in Hexadecimal format XX.XX.XX.XX.XX.XX.XX.XX
 // This function entirely avoids any heap allocations. This is achieved by using the Serial.print()
 // function directly byte by byte, without intermediate string construction. Arduino's Print class
-// (which Serial inherits from) is specifically designed to avoid dynamic allocation for primtive
+// (which Serial inherits from) is specifically designed to avoid dynamic allocation for primitive
 //  data types like uint8_t and chars.
 void printDeviceAddress(const DeviceAddress address) {
   for (uint8_t i = 0; i < 8; i++) {
