@@ -14,10 +14,10 @@
 #include "ConsoleUtils.h"
 #include "Display.h"
 #include "ErrDisplay.h"
+#include "ErrorMessages.h"
 #include "FrequentlyUtils.h"
 #include "LedUtils.h"
 #include "StatDisplay.h"
-#include "ErrorMessages.h"
 
 // Preprocessor Macros
 #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
@@ -326,7 +326,7 @@ float initTemperatureSensor() {
     displayErrorAndHalt(String(ErrorMessages::getBuffer()));
   }
 
-  // Check that sensor is not reporting parasite power mode, which would not be expected and likely a symptom of some defect
+  // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely a symptom of some defect.
   if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
     // Serial.print(F("WARNING: DS18B20 temperature sensor "));
     // printDeviceAddress(tempSensorDeviceAddress);
@@ -367,6 +367,13 @@ float initTemperatureSensor() {
   Serial.println();
   Serial.println(F("DS18B20 temperature sensor successfully initialized"));
   Serial.println();
+
+  while (true) {
+    printTemperature(temperatureSensors, tempSensorDeviceAddress);
+    Serial.println();
+    delay(1000);
+  }
+
   return tempC;
 }
 
@@ -376,6 +383,11 @@ float initTemperatureSensor() {
 // • in case of error (e.g., sensor disconnected), an error message is printed instead
 // • returns the temperature in Celsius as float; in case of error, NaN is returned
 float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
+  // Request temperature conversion and wait for it to complete
+  sensors.requestTemperaturesByAddress(deviceAddress);
+  // Wait for conversion to complete (at 10-bit: ~187.5ms)
+  delay(200); // TODO nonblocking
+
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
     Serial.println();
@@ -392,6 +404,11 @@ float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) 
 // readTemp measures the temperature, returns the temperature in Celsius as float
 // or NAN in case of error
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
+  // Request temperature conversion and wait for it to complete
+  sensors.requestTemperaturesByAddress(deviceAddress);
+  // Wait for conversion to complete (at 10-bit: ~187.5ms)
+  delay(200); // TODO nonblocking
+
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
     return NAN;

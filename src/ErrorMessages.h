@@ -23,7 +23,7 @@
 // truncation occurred.
 
 namespace ErrorMessages {
-  constexpr size_t BUFFER_SIZE = 180;
+  constexpr size_t BUFFER_SIZE = 150;
   constexpr char TRUNCATION_MARKER = static_cast<char>(187); // '»' character to indicate truncation in U8G2 default fonts, such as `u8g2_font_7x13_tf`
 
   // External declaration of the error buffer (defined in ErrorMessages.cpp)
