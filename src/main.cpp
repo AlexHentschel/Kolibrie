@@ -29,7 +29,7 @@
 /* On-Board Screen (OLED 72x40)
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
-U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
+static U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 // U8G2_R0 	No rotation, landscape
 // U8G2_R1 90 degree clockwise rotation
 // U8G2_R2 180 degree clockwise rotation
@@ -37,25 +37,28 @@ U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 
 /* DS18B20 Temperature Sensor
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-#define TEMPERATURE_SENSOR_GPIO 2 // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
-#define TEMPERATURE_PRECISION 10  // select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
-OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
-DallasTemperature temperatureSensors(&temperatureSensorBus);
+static constexpr uint8_t TEMPERATURE_SENSOR_GPIO = 2; // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
+static constexpr uint8_t TEMPERATURE_PRECISION = 10;  // select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
+static OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
+static DallasTemperature temperatureSensors(&temperatureSensorBus);
 
 // Reading temperatures with the DallasTemperature library is a two setp process for efficiency:
 // 1. Request temperature measurement (non-blocking, when `waitForConversion` is set to false) via
 //    methods `requestTemperaturesByAddress` or `requestTemperatures` or `requestTemperaturesByIndex`
 // 2. After sufficient time has passed for the measurement to complete, retrieve the temperature via
 //    `getTempC` or `getTempF`. In our case, the waittime is at least 187.5ms, as we use 10-bit precision.
-std::unique_ptr<FrequencyTrigger> requestTempRead = nullptr; // to schedule temperature reads
-std::unique_ptr<FrequencyTrigger> retrieveTemp = nullptr;    // to retrieve temperature after sufficient conversion time has passed
+static FrequencyTrigger requestTempRead(FrequencyUtils::unbounded_lifetime, 1000u); // read temperature every 1s, unbounded lifetime
+static CooldownTriggerN retrieveTemp(1, 220u);                                      // wait at least 220ms after requesting temperature read to retrieve it and manually deactivate
 
 /* LEDs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-#define BLUE_LED_BUILTIN 8 // GPIO 8, Blue LED: LOW = on, HIGH = off
+static constexpr uint8_t BLUE_LED_BUILTIN = 8; // GPIO 8, Blue LED: LOW = on, HIGH = off
 
-// LEDs' blinking to indicate that temperature was measured successfully
-LEDExpiringToggler *tempMeasurementSuccess = nullptr; // blinks 5 times turning 1 second
+// LEDs' blinking patterns to indicate that temperature was measured successfully
+// blinking patter ("-" denoting LED on for 500ms, "." denoting LED off for 200ms):  - . -
+// ⇒ lifetime 1200ms for single measurement success indication
+// This is only activated after the temperature was successfully measured.
+static LEDExpiringToggler tempMeasurementSuccess(BLUE_LED_BUILTIN, 1200, 500, 200, LedUtils::LOW_IS_ON);
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -63,28 +66,30 @@ LEDExpiringToggler *tempMeasurementSuccess = nullptr; // blinks 5 times turning 
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
 // power or not. Here, the micro-controller's GPIO (3.3V) controls the external load, but
 // through an IRL530 Power Mosfet, supplying 5V trigger to a Solid-State-Relay switching AC mains.
-#define EXT_LOAD_SWITCH 1 // GPIO 1 controls the external load (through a Mosfet supplying 5V trigger to SSR switching AC mains)
+static constexpr uint8_t EXT_LOAD_SWITCH = 1; // GPIO 1 controls the external load (through a Mosfet supplying 5V trigger to SSR switching AC mains)
 #define EXT_LOAD_ON HIGH
 #define EXT_LOAD_OFF LOW
 
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
-LEDExpiringToggler *extLoadToggler = nullptr;
+LEDExpiringToggler *extLoadToggler = nullptr; // TODO: remove
 
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // prints life-signs to Serial console, unbounded runtime, print every 7331 milliseconds.
 // Notes:
-//  * Static allocation avoids memory leak; object persists for application lifetime
+//  * Can be reassigned to display different messages during runtime
+//    CAUTION: heap allocation. Frequent reassignment can cause heap fragmentation on MCUs. Reassign sparingly.
 //  * We choose an larger prime interval to avoid accidental synchronization with other periodic tasks
-static PrintLifeSign consolePrintLifeSignInstance(FrequencyUtils::unbounded_lifetime, 7331, "Controller alive");
-PrintLifeSign *consolePrintLifeSign = &consolePrintLifeSignInstance;
+auto consolePrintLifeSign = std::make_unique<PrintLifeSign>(FrequencyUtils::unbounded_lifetime, 7331, "Controller alive");
 
-std::unique_ptr<StatDisplay> statDisplay = nullptr;
+// Application-specific Status Displays
+static StatDisplay statDisplay(u8g2, 700, 300);
 
-std::unique_ptr<DisplayScrollText> oledLine1Scroller = nullptr;
-std::unique_ptr<DisplayScrollText> oledLine1Scroller2 = nullptr;
-
+// Generic Error Display (for displaying error messages on the OLED)
 std::unique_ptr<ErrDisplay> errDisplay = nullptr;
+
+/* Misc
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 int64_t startMicros = 0;
 int testStateCounter = 0;
@@ -103,8 +108,7 @@ void displayErrorAndHalt(const String &errorMessage);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-
-void setup() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+void setup() {
   Serial.begin(115200);
 #if defined(DEBUG)
   delay(1000); // provide some time for Monitor to connect
@@ -130,7 +134,6 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
    * blinking patter ("-" denoting LED on for 500ms, "." denoting LED off for 200ms):  - . -
    * ⇒ lifetime 1200ms for single measurement success indication
    * This is only activated after the temperature was successfully measured */
-  tempMeasurementSuccess = new LEDExpiringToggler(BLUE_LED_BUILTIN, 1200, 500, 200, LedUtils::LOW_IS_ON);
 
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
   extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
@@ -150,24 +153,21 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   float tempC = initTemperatureSensor();
-  requestTempRead = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 1000u); // read temperature every 1s, unbounded lifetime
-  retrieveTemp = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 200u);     // wait at least 200ms after requesting temperature read to retrieve it and manually deactivate
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
-  statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
-  statDisplay->setHeatingStatus(false);
-  statDisplay->setWifiStatus(false);
-  statDisplay->setTemp(tempC);
+  statDisplay.setHeatingStatus(false);
+  statDisplay.setWifiStatus(false);
+  statDisplay.setTemp(tempC);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   consolePrintLifeSign->activate(293);
 
-  requestTempRead->activate();
+  requestTempRead.activate();
 
-  tempMeasurementSuccess->activate();
+  tempMeasurementSuccess.activate();
   extLoadToggler->activate();
 
-  requestTempRead->activate(421);
+  requestTempRead.activate(421);
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
   startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
@@ -231,6 +231,7 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
 // providing a space between the line leaving the display and the repeated message scrolling into the display.
 void displayErrorAndHalt(const String &errorMessage) {
   // Print to Serial console
+  int64_t lastSerialPrintMicros = esp_timer_get_time();
   Serial.println();
   Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
   Serial.println(errorMessage);
@@ -242,9 +243,21 @@ void displayErrorAndHalt(const String &errorMessage) {
   errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 20);
 
   // Infinite loop: keep updating the error display
+  int64_t currentMicros;
   while (true) {
-    int64_t currentMicros = esp_timer_get_time();
-    errDisplay->checkRedraw(currentMicros);
+    // The error display needs to be called very frequently for smooth scrolling. In contrast, the console print of the error message is
+    // much less frequent and not particularly time sensitive. Since the check involves expensive 64-bit integer arithmetic, we check it
+    // separately infrequently (every 773 iterations) to avoid doing the expensive 64-bit integer check every time.
+    for (int i = 772; i >= 0; i--) {
+      currentMicros = esp_timer_get_time();
+      errDisplay->checkRedraw(currentMicros);
+    }
+    if (lastSerialPrintMicros + 7000000LL > currentMicros) { // only print every 7 seconds to avoid flooding Serial console
+      lastSerialPrintMicros = currentMicros;
+      Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
+      Serial.println(errorMessage);
+      Serial.println(F("Halted execution."));
+    }
   }
 }
 
