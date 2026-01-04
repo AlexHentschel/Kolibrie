@@ -42,7 +42,13 @@ U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 DallasTemperature temperatureSensors(&temperatureSensorBus);
 
-std::unique_ptr<FrequencyTrigger> triggerReadTemp = nullptr;
+// Reading temperatures with the DallasTemperature library is a two setp process for efficiency:
+// 1. Request temperature measurement (non-blocking, when `waitForConversion` is set to false) via
+//    methods `requestTemperaturesByAddress` or `requestTemperatures` or `requestTemperaturesByIndex`
+// 2. After sufficient time has passed for the measurement to complete, retrieve the temperature via
+//    `getTempC` or `getTempF`. In our case, the waittime is at least 187.5ms, as we use 10-bit precision.
+std::unique_ptr<FrequencyTrigger> requestTempRead = nullptr; // to schedule temperature reads
+std::unique_ptr<FrequencyTrigger> retrieveTemp = nullptr;    // to retrieve temperature after sufficient conversion time has passed
 
 /* LEDs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -144,8 +150,8 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   float tempC = initTemperatureSensor();
-  triggerReadTemp = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
-
+  requestTempRead = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 1000u); // read temperature every 1s, unbounded lifetime
+  retrieveTemp = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 200u);     // wait at least 200ms after requesting temperature read to retrieve it and manually deactivate
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   statDisplay = std::make_unique<StatDisplay>(u8g2, 700, 300);
@@ -156,12 +162,12 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   consolePrintLifeSign->activate(293);
 
-  triggerReadTemp->activate();
+  requestTempRead->activate();
 
   tempMeasurementSuccess->activate();
   extLoadToggler->activate();
 
-  triggerReadTemp->activate(421);
+  requestTempRead->activate(421);
 
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
   startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
@@ -318,7 +324,8 @@ float initTemperatureSensor() {
   }
 
   // STEP 3: Init Temperature Sensor
-  temperatureSensors.begin(); // Initialise the sensor.
+  temperatureSensors.begin();                     // Initialize the sensor.
+  temperatureSensors.setWaitForConversion(false); // makes `sensors.requestTemperaturesByAddress` non-blocking, need to track time manually after requesting temperature conversion
 
   // STEP 4: Post-Init Sanity Checks that the DS18B20 temperature sensor is properly connected
   if (!(temperatureSensors.isConnected(tempSensorDeviceAddress))) { // sanity check: the device at the expected address is reported as connected
@@ -415,3 +422,6 @@ float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   }
   return tempC;
 }
+
+// NOTEs:
+// example for displaying temperature on web server hosted by the MCU: https://randomnerdtutorials.com/esp32-ds18b20-temperature-arduino-ide/
