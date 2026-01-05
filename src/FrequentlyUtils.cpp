@@ -307,6 +307,11 @@ void FrequencyToggler2::activate_(int64_t currentMicros, unsigned int delayMs) {
   nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
 }
 
+void FrequencyToggler2::expire() {
+  if (status != _status::Expired)
+    status = _status::ShouldExpire;
+}
+
 bool FrequencyToggler2::isExpired() { return !isActive(); }
 
 bool FrequencyToggler2::isActive() { return status == _status::Active; }
