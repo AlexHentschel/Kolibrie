@@ -199,6 +199,24 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
   int64_t currentMicros = esp_timer_get_time();
 
   if (retrieveTemp.checkTrigger(currentMicros)) {
+    float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
+    if (!std::isfinite(tempC)) { // retrieving temperature failed
+      ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
+      displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    }
+
+    float smoothedTemp = tempEwma.update(tempC);
+    statDisplay.setTemp(smoothedTemp);
+
+    // Heating control logic
+    // To avoid hysteresis: don't change state if between limits
+    if (smoothedTemp < TEMP_LIMIT_HEATING_ON) { // Temperature too low: make sure heating is on
+      statDisplay.setHeatingStatus(true);
+    } else if (smoothedTemp > TEMP_LIMIT_HEATING_OFF) { // Temperature high enough: make sure heating is off
+      statDisplay.setHeatingStatus(false);
+    }
+
+    tempMeasurementSuccess.activate();
   }
 
   if (requestTempRead.checkTrigger(currentMicros)) {
@@ -243,6 +261,11 @@ void loop() { /* ━━━━━━━━━━━━━━━━━━━━━
   //   testStateCounter = 4;
   // }
 
+  statDisplay.checkRedraw(currentMicros);
+  tempMeasurementSuccess.checkToggleLED(currentMicros);
+  if (extLoadToggler) {
+    extLoadToggler->checkToggleLED(currentMicros);
+  }
   consolePrintLifeSign->checkConsolePrint(currentMicros);
 }
 
@@ -274,12 +297,12 @@ void displayErrorAndHalt(const String &errorMessage) {
   while (true) {
     // The error display needs to be called very frequently for smooth scrolling. In contrast, the console print of the error message is
     // much less frequent and not particularly time sensitive. Since the check involves expensive 64-bit integer arithmetic, we check it
-    // separately infrequently (every 773 iterations) to avoid doing the expensive 64-bit integer check every time.
-    for (int i = 772; i >= 0; i--) {
+    // separately infrequently (every 21 iterations) to avoid doing the expensive 64-bit integer check every time.
+    for (int i = 20; i >= 0; i--) {
       currentMicros = esp_timer_get_time();
       errDisplay->checkRedraw(currentMicros);
     }
-    if (lastSerialPrintMicros + 7000000LL > currentMicros) { // only print every 7 seconds to avoid flooding Serial console
+    if (lastSerialPrintMicros + 7000000LL < currentMicros) { // only print every 7 seconds to avoid flooding Serial console
       lastSerialPrintMicros = currentMicros;
       Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
       Serial.println(errorMessage);
@@ -345,7 +368,7 @@ float initTemperatureSensor() {
   uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress);
   if (deviceCount != 1) {
     ErrorMessages::DeviceCountError::build(ErrorMessages::errorBuffer, TEMPERATURE_SENSOR_GPIO, deviceCount);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
 
   // STEP 2: Pre-Init Sanity Checks that the device is supported by the DallasTemperature driver:
@@ -355,11 +378,11 @@ float initTemperatureSensor() {
 
   if (!(temperatureSensors.validAddress(tempSensorDeviceAddress))) { // confirm that the address is valid
     ErrorMessages::IncompatibleAddressError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
   if (!(temperatureSensors.validFamily(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
     ErrorMessages::UnknownDeviceError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
 
   // STEP 3: Init Temperature Sensor
@@ -369,7 +392,7 @@ float initTemperatureSensor() {
   // STEP 4: Post-Init Sanity Checks that the DS18B20 temperature sensor is properly connected
   if (!(temperatureSensors.isConnected(tempSensorDeviceAddress))) { // sanity check: the device at the expected address is reported as connected
     ErrorMessages::SensorDisconnectedError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
 
   // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely a symptom of some defect.
@@ -378,7 +401,7 @@ float initTemperatureSensor() {
     // printDeviceAddress(tempSensorDeviceAddress);
     // Serial.println(F(" is reporting PARASITE POWER MODE. This is unexpected and may indicate a defect."));
     ErrorMessages::ParasitePowerError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
 
   // set the temperature accuracy
@@ -393,7 +416,7 @@ float initTemperatureSensor() {
   uint8_t actualPrecision = temperatureSensors.getResolution(tempSensorDeviceAddress);
   if (actualPrecision != TEMPERATURE_PRECISION) {
     ErrorMessages::PrecisionSettingError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress, TEMPERATURE_PRECISION, actualPrecision);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
   Serial.print(F("Sensor operating with precision of "));
   Serial.print(actualPrecision, DEC);
@@ -404,11 +427,11 @@ float initTemperatureSensor() {
   delay(200);                                                               // Wait for temperature read to complete (at 10-bit: ~187.5ms)
 
   float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
-  if (!isfinite(tempC)) {
+  if (!std::isfinite(tempC)) {
     ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
-  Serial.print(F("  Current temperature: "));
+  Serial.print(F(" Current temperature: "));
   Serial.print(tempC);
   Serial.print(F(" C / "));
   Serial.print(DallasTemperature::toFahrenheit(tempC));
@@ -439,7 +462,7 @@ float initTemperatureSensor() {
 // must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
 float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, bool printFahrenheit /* = false */) {
   float tempC = sensors.getTempC(deviceAddress);
-  if (tempC == DEVICE_DISCONNECTED_C) {
+  if (tempC != DEVICE_DISCONNECTED_C) {
     Serial.println();
     Serial.print(F("ERROR: reading temperature failed with value "));
     Serial.println(tempC);
@@ -460,7 +483,7 @@ float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, 
 // must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
-  if (tempC == DEVICE_DISCONNECTED_C) {
+  if (tempC != DEVICE_DISCONNECTED_C) {
     return NAN;
   }
   return tempC;

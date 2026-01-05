@@ -81,11 +81,13 @@ void FrequencyTrigger::advanceState(int64_t currentMicros) {
 
     int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     while (currentMicros > speculativeNextTrigger) {
-      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // We want to find the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
       // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
       nextTriggerAtOrAfterMicros = speculativeNextTrigger;
 
       // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      // In practise, this value should not overflow, because the 64-bit integer used here to track microseconds can cover hundred thousands of years.
+      // If this overflows, it is a usage bug - and not a logical bug inside the module here.
       accumulatedAdvanceMicros <<= 1;
       speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }
@@ -351,11 +353,13 @@ void FrequencyToggler2::advanceState(int64_t currentMicros) {
 
     int64_t speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     while (currentMicros > speculativeNextTrigger) {
-      // We want to fing the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
+      // We want to find the smallest value of `nextTriggerAtOrAfterMicros` such that currentMicros < nextTriggerAtOrAfterMicros holds.
       // This is true for `speculativeNextTrigger`, so we can increase `nextTriggerAtOrAfterMicros` to at least this value.
       nextTriggerAtOrAfterMicros = speculativeNextTrigger;
 
       // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
+      // In practise, this value should not overflow, because the 64-bit integer used here to track microseconds can cover hundred thousands of years.
+      // If this overflows, it is a usage bug - and not a logical bug inside the module here.      
       accumulatedAdvanceMicros <<= 1;
       speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }
