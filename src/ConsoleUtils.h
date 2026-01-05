@@ -32,9 +32,11 @@ class PrintLifeSign {
   void checkConsolePrint();
 
   // Lifecycle functions
-  void activate(unsigned int delayMs = 0); // activates the life-sign printing (after optional delay [milliseconds])
-  void expire();                           // disables the life-sign printing
-  bool isExpired();                        // returns true if life-sign printing is expired/disabled
+  void activate(unsigned int delayMs = 0);                        // activates the life-sign printing, fires immediately or after the optional delay [milliseconds]
+  void activate(int64_t currentMicros, unsigned int delayMs = 0); // more efficient: activates using provided current time [microseconds]
+
+  void expire();    // disables the life-sign printing
+  bool isExpired(); // returns true if life-sign printing is expired/disabled
 
   private:
   FrequencyTrigger trigger_;

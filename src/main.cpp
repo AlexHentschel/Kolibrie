@@ -15,6 +15,7 @@
 #include "Display.h"
 #include "ErrDisplay.h"
 #include "ErrorMessages.h"
+#include "Ewma.h"
 #include "FrequentlyUtils.h"
 #include "LedUtils.h"
 #include "StatDisplay.h"
@@ -35,12 +36,17 @@ static U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 // U8G2_R2 180 degree clockwise rotation
 // U8G2_R3 270 degree clockwise rotation
 
-/* DS18B20 Temperature Sensor
+/* Temperature Control
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/* DS18B20 Temperature Sensor
+ * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 static constexpr uint8_t TEMPERATURE_SENSOR_GPIO = 2; // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
 static constexpr uint8_t TEMPERATURE_PRECISION = 10;  // select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
 static OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 static DallasTemperature temperatureSensors(&temperatureSensorBus);
+
+static DeviceAddress tempSensorDeviceAddress; // set by the initialization codefor DS18B20; the address (8 bytes) is provided by DallasTemperature library
 
 // Reading temperatures with the DallasTemperature library is a two setp process for efficiency:
 // 1. Request temperature measurement (non-blocking, when `waitForConversion` is set to false) via
@@ -48,7 +54,26 @@ static DallasTemperature temperatureSensors(&temperatureSensorBus);
 // 2. After sufficient time has passed for the measurement to complete, retrieve the temperature via
 //    `getTempC` or `getTempF`. In our case, the waittime is at least 187.5ms, as we use 10-bit precision.
 static FrequencyTrigger requestTempRead(FrequencyUtils::unbounded_lifetime, 1000u); // read temperature every 1s, unbounded lifetime
-static CooldownTriggerN retrieveTemp(1, 220u);                                      // wait at least 220ms after requesting temperature read to retrieve it and manually deactivate
+
+// milliseconds to wait after requesting temperature read before retrieving it.  In our case, the
+// waittime is at least 187.5ms, as we use 10-bit precision. We add about 20% margin to be safe.
+static constexpr unsigned int TEMP_READ_DELAY_MS = 220u;
+
+// Delayed trigger for retrieving the temperature after requesting.
+// CAUTION: `CooldownTriggerN` fires immediately upon activation (unless a delayMs is specified). We want the _first_ trigger _after_ `TEMP_READ_DELAY_MS`.
+// Therefore, we specify `TEMP_READ_DELAY_MS` as DELAY when activating this trigger after requesting the temperature read. The cooldown here is irrelevant,
+// as we only want to retrieve the temperature once per request.
+static CooldownTriggerN retrieveTemp(1, 99999u);
+
+/* Heating control
+ * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+static constexpr float TEMP_LIMIT_HEATING_ON = 5.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_OFF = 8.0f; // Temperature [°C] above which heating is turned OFF
+
+// EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
+// after a step change of the input, it takes about 50 samples to move the ouput approx. 63% of the way from the old to the new value.
+// CAUTION: this instance starts with value 0 and should be initialized with the first temperature reading using the `reset` method.
+static Ewma tempEwma(0.02);
 
 /* LEDs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -100,7 +125,7 @@ int testStateCounter = 0;
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 float initTemperatureSensor();
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress);
+float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, bool printFahrenheit = false);
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
 void printDeviceAddress(const DeviceAddress address);
@@ -130,11 +155,6 @@ void setup() {
     }
   } // startupBlinker on stack automatically destroyed here when leaving scope
 
-  /* LEDs' blinking patterns to indicate that temperature was measured successfully
-   * blinking patter ("-" denoting LED on for 500ms, "." denoting LED off for 200ms):  - . -
-   * ⇒ lifetime 1200ms for single measurement success indication
-   * This is only activated after the temperature was successfully measured */
-
   /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
   extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
 
@@ -150,27 +170,25 @@ void setup() {
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
   u8g2.setContrast(3); // set contrast to maximum
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
+  tempEwma.reset(currentTempC);                 // initialize EWMA to start at the initial temperature reading
 
-  float tempC = initTemperatureSensor();
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   statDisplay.setHeatingStatus(false);
   statDisplay.setWifiStatus(false);
-  statDisplay.setTemp(tempC);
+  statDisplay.setTemp(currentTempC);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  consolePrintLifeSign->activate(293);
+  startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
+  consolePrintLifeSign->activate(startMicros, 293u);
+  requestTempRead.activate(startMicros, 661u);
 
-  requestTempRead.activate();
-
-  tempMeasurementSuccess.activate();
+  // tempMeasurementSuccess.activate();
   extLoadToggler->activate();
 
-  requestTempRead.activate(421);
-
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
-  startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -179,6 +197,15 @@ void setup() {
 
 void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   int64_t currentMicros = esp_timer_get_time();
+
+  if (retrieveTemp.checkTrigger(currentMicros)) {
+  }
+
+  if (requestTempRead.checkTrigger(currentMicros)) {
+    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress);
+
+    retrieveTemp.activate(currentMicros, TEMP_READ_DELAY_MS);
+  }
 
   // Serial.print(F("  Current temperature: "));
   // Serial.print(tempC);
@@ -263,7 +290,7 @@ void displayErrorAndHalt(const String &errorMessage) {
 
 // Scan for devices on the OneWire bus.
 // • prints addresses of detected devices to Serial console
-// • writes the address of the LAST DEVICE found to `tempSensorDeviceAddress`
+// • writes the address of the LAST DEVICE found to `addressOut`
 // • returns number of devices found
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut) {
   uint8_t count = 0;
@@ -313,7 +340,6 @@ void printDeviceAddress(const DeviceAddress address) {
 float initTemperatureSensor() {
   Serial.print(F("Scanning for OneWire devices on GPIO pin "));
   Serial.println(TEMPERATURE_SENSOR_GPIO, DEC);
-  DeviceAddress tempSensorDeviceAddress; // type definition for DS18B20 address (8 bytes), provided by DallasTemperature library
 
   // STEP 1: scan for connected devices on the OneWire bus:
   uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress);
@@ -369,11 +395,14 @@ float initTemperatureSensor() {
     ErrorMessages::PrecisionSettingError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress, TEMPERATURE_PRECISION, actualPrecision);
     displayErrorAndHalt(String(ErrorMessages::getBuffer()));
   }
-
-  // Happy path
   Serial.print(F("Sensor operating with precision of "));
   Serial.print(actualPrecision, DEC);
   Serial.print(F(" bits."));
+
+  // Happy path: initial temperature read
+  temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
+  delay(200);                                                               // Wait for temperature read to complete (at 10-bit: ~187.5ms)
+
   float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
   if (!isfinite(tempC)) {
     ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
@@ -389,46 +418,47 @@ float initTemperatureSensor() {
   Serial.println();
 
   while (true) {
-    printTemperature(temperatureSensors, tempSensorDeviceAddress);
-    Serial.println();
-    delay(1000);
-  }
+    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
+    retrieveTemp.activate(TEMP_READ_DELAY_MS);
 
-  return tempC;
+    while (!retrieveTemp.checkTrigger()) { // Wait for temperature read to complete (at 10-bit: ~187.5ms)
+      delay(3);
+    }
+    float tempC = printTemperature(temperatureSensors, tempSensorDeviceAddress);
+
+    return tempC;
+  }
 }
 
 // printTemperature
 // • measured the temperature,
-// • prints the temperature to Serial console in units of Celsius and Fahrenheit
+// • prints the temperature to Serial console in units of Celsius and optionally Fahrenheit (off by default),
 // • in case of error (e.g., sensor disconnected), an error message is printed instead
 // • returns the temperature in Celsius as float; in case of error, NaN is returned
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress) {
-  // Request temperature conversion and wait for it to complete
-  sensors.requestTemperaturesByAddress(deviceAddress);
-  // Wait for conversion to complete (at 10-bit: ~187.5ms)
-  delay(200); // TODO nonblocking
-
+// CAUTION: we have set `waitForConversion` to false, i.e. temperature measurements are non-blocking. Specifically, they
+// must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
+float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, bool printFahrenheit /* = false */) {
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
     Serial.println();
-    Serial.println(F("ERROR: reading temperature failed with value "));
+    Serial.print(F("ERROR: reading temperature failed with value "));
+    Serial.println(tempC);
     return NAN;
   }
   Serial.print(tempC);
-  Serial.print(F(" C / "));
-  Serial.print(DallasTemperature::toFahrenheit(tempC));
-  Serial.print(F(" F"));
+  Serial.print(F(" C"));
+  if (printFahrenheit) {
+    Serial.print(F("  / "));
+    Serial.print(DallasTemperature::toFahrenheit(tempC));
+    Serial.print(F(" F"));
+  }
   return tempC;
 }
 
-// readTemp measures the temperature, returns the temperature in Celsius as float
-// or NAN in case of error
+// readTemp retrieves the temperature and returns the temperature in Celsius as float or NAN in case of error.
+// CAUTION: we have set `waitForConversion` to false, i.e. temperature measurements are non-blocking. Specifically, they
+// must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
-  // Request temperature conversion and wait for it to complete
-  sensors.requestTemperaturesByAddress(deviceAddress);
-  // Wait for conversion to complete (at 10-bit: ~187.5ms)
-  delay(200); // TODO nonblocking
-
   float tempC = sensors.getTempC(deviceAddress);
   if (tempC == DEVICE_DISCONNECTED_C) {
     return NAN;

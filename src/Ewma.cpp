@@ -24,7 +24,7 @@ static float clampAlpha_(float alpha) {
 
 // Constructor: alpha should be in range [0, 1]. Out-of-range values are clamped.
 // Attention:
-//  • alpha = 0 causes no updates (infitie smoothing window)
+//  • alpha = 0 causes no updates (infintie smoothing window)
 //  • alpha = 1 causes no averaging, the "smoothed" value is set to the new value immediately
 // While those alpha values are not recommended in practice, they are allowed for completeness.
 Ewma::Ewma(float alpha, float startValue /*= 0.0f */)

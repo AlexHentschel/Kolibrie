@@ -97,7 +97,22 @@ void FrequencyTrigger::advanceState(int64_t currentMicros) {
 
 void FrequencyTrigger::activate(unsigned int delayMs /* = 0 */) {
   if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
+  activate_(esp_timer_get_time(), delayMs);
+}
+
+void FrequencyTrigger::activate(int64_t currentMicros, unsigned int delayMs) {
+  if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
+  activate_(currentMicros, delayMs);
+}
+
+// activate_ is an internal helper that sets up the activation state.
+// CAUTION: it should be called for positive `lifetimeMicros` only.
+void FrequencyTrigger::activate_(int64_t currentMicros, unsigned int delayMs) {
+  lastActivationObservedMicros = currentMicros;
+  if (delayMs > 0) {
+    lastActivationObservedMicros += static_cast<int64_t>(delayMs) * 1000LL;
+  }
+
   expired = false;
   // trigger on next call to `checkTrigger()` (after `delayMs` milliseconds)
   nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
@@ -163,16 +178,24 @@ void CooldownTriggerN::advanceState(int64_t currentMicros) {
   return;
 }
 
-void CooldownTriggerN::activate(int64_t currentMicros, unsigned int delayMs /* = 0 */) {
-  if (n == 0) return;    // zero means no triggers to fire, i.e. we remain disabled
-  remainingTriggers = n; // negative means infinite
-  nextTriggerAtOrAfterMicros = currentMicros + static_cast<int64_t>(delayMs) * 1000LL;
+void CooldownTriggerN::activate(int64_t currentMicros, unsigned int delayMs) {
+  if (n == 0) return; // zero means no triggers to fire, i.e. we remain disabled
+  activate_(currentMicros, delayMs);
 }
 
 void CooldownTriggerN::activate(unsigned int delayMs /* = 0 */) {
-  if (n == 0) return;    // zero means no triggers to fire, i.e. we remain disabled
+  if (n == 0) return; // zero means no triggers to fire, i.e. we remain disabled
+  activate_(esp_timer_get_time(), delayMs);
+}
+
+// activate_ is an internal helper that sets up the activation state.
+// CAUTION: it should be called for positive `lifetimeMicros` only.
+void CooldownTriggerN::activate_(int64_t currentMicros, unsigned int delayMs) {
   remainingTriggers = n; // negative means infinite
-  nextTriggerAtOrAfterMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
+  nextTriggerAtOrAfterMicros = currentMicros;
+  if (delayMs > 0) {
+    nextTriggerAtOrAfterMicros += static_cast<int64_t>(delayMs) * 1000LL;
+  }
 }
 
 void CooldownTriggerN::expire() { remainingTriggers = 0; }
@@ -195,6 +218,7 @@ bool FrequencyToggler::isCurrentStateOn() { return frequencyToggler2_.isCurrentS
 
 void FrequencyToggler::expire() { frequencyToggler2_.expire(); }
 void FrequencyToggler::activate(unsigned int delayMs /* = 0 */) { frequencyToggler2_.activate(delayMs); }
+void FrequencyToggler::activate(int64_t currentMicros, unsigned int delayMs) { frequencyToggler2_.activate(currentMicros, delayMs); }
 bool FrequencyToggler::isExpired() { return frequencyToggler2_.isExpired(); }
 bool FrequencyToggler::isActive() { return frequencyToggler2_.isActive(); }
 
@@ -263,16 +287,24 @@ bool FrequencyToggler2::isCurrentStateOn() {
 
 void FrequencyToggler2::activate(unsigned int delayMs /* = 0 */) {
   if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
-  lastActivationObservedMicros = esp_timer_get_time() + static_cast<int64_t>(delayMs) * 1000LL;
-  status = _status::Active;
-
-  // trigger on next call to `checkTrigger()` (after `delayMs` milliseconds)
-  nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
+  activate_(esp_timer_get_time(), delayMs);
 }
 
-void FrequencyToggler2::expire() {
-  if (status != _status::Expired)
-    status = _status::ShouldExpire;
+void FrequencyToggler2::activate(int64_t currentMicros, unsigned int delayMs) {
+  if (lifetimeMicros == 0LL) return; // no lifetime, so we don't need to trigger
+  activate_(currentMicros, delayMs);
+}
+
+// activate_ is an internal helper that sets up the activation state.
+// CAUTION: it should be called for positive `lifetimeMicros` only.
+void FrequencyToggler2::activate_(int64_t currentMicros, unsigned int delayMs) {
+  status = _status::Active;
+  lastActivationObservedMicros = currentMicros;
+  if (delayMs > 0) {
+    lastActivationObservedMicros += static_cast<int64_t>(delayMs) * 1000LL;
+  }
+  // trigger on next call to `checkTrigger()` (after `delayMs` milliseconds)
+  nextTriggerAtOrAfterMicros = lastActivationObservedMicros;
 }
 
 bool FrequencyToggler2::isExpired() { return !isActive(); }

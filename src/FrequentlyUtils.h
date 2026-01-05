@@ -55,9 +55,11 @@ class FrequencyTrigger {
   bool checkTrigger();                      // Convenience: calls esp_timer_get_time() internally (less efficient)
 
   // Lifecycle functions
-  void activate(unsigned int delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                           // disables the trigger
-  bool isExpired();                        // returns true if the trigger is expired/disabled
+  void activate(unsigned int delayMs = 0);                    // activates the trigger, fires immediately or after the optional delay [milliseconds]
+  void activate(int64_t currentMicros, unsigned int delayMs); // more efficient: activates using provided current time [microseconds]
+  void expire();                                              // disables the trigger
+
+  bool isExpired(); // returns true if the trigger is expired/disabled
 
   private:
   // behavioral parameters are lifetime-constants (provided at construction)
@@ -69,8 +71,8 @@ class FrequencyTrigger {
   int64_t nextTriggerAtOrAfterMicros;
   bool expired;
 
-  bool checkTrigger_(int64_t currentMicros); // Internal: does not check expiry
-
+  void activate_(int64_t currentMicros, unsigned int delayMs); // Internal activate implementation: does not check need for activation (i.e. zero lifetime)
+  bool checkTrigger_(int64_t currentMicros);                   // Internal: does not check expiry
   void advanceState(int64_t currentMicros);
 };
 
@@ -95,6 +97,7 @@ class CooldownTriggerN {
   // At any point, `expire()` may be called to disable the trigger. Any calls to `checkTrigger()` thereafter
   // return false unless `activate()` is called again to reset the trigger.
   //
+  // A freshly activated trigger fires immediately (if delayMs is zero) or after the specified initial delay.
   //
   // Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
   // have the suffix 'Micros'. Constructors and `activate()` take milliseconds as input (unsigned int, with 'Ms'
@@ -125,10 +128,11 @@ class CooldownTriggerN {
   bool checkTrigger();                      // Convenience: calls esp_timer_get_time() internally (less efficient)
 
   // Lifecycle functions
-  void activate(unsigned int delayMs = 0);                        // activates the trigger, fires immediately or after the optional delay [milliseconds]
-  void activate(int64_t currentMicros, unsigned int delayMs = 0); // more efficient: activates using provided current time [microseconds]
-  void expire();                                                  // disables the trigger
-  bool isExpired();                                               // returns true if the trigger is expired/disabled
+  void activate(unsigned int delayMs = 0);                    // activates the trigger, fires immediately or after the optional delay [milliseconds]
+  void activate(int64_t currentMicros, unsigned int delayMs); // more efficient: activates using provided current time [microseconds]
+  void expire();                                              // disables the trigger
+
+  bool isExpired(); // returns true if the trigger is expired/disabled
 
   private:
   // behavioral parameters are lifetime-constants (provided at construction)
@@ -139,7 +143,8 @@ class CooldownTriggerN {
   int remainingTriggers; // zero indicates expired/disabled; negative means infinite number of triggers remaining
   int64_t nextTriggerAtOrAfterMicros;
 
-  void advanceState(int64_t currentMicros); // advances internal state after a trigger has fired
+  void activate_(int64_t currentMicros, unsigned int delayMs); // Internal activate implementation: does not check need for activation (i.e. zero lifetime)
+  void advanceState(int64_t currentMicros);                    // advances internal state after a trigger has fired
 };
 
 class FrequencyToggler2 {
@@ -198,10 +203,12 @@ class FrequencyToggler2 {
   bool isCurrentStateOn();
 
   // Lifecycle functions
-  void activate(unsigned int delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                           // disables the trigger
-  bool isExpired();                        // returns true if the trigger is expired/disabled (inverse of `isActive()`)
-  bool isActive();                         // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned int delayMs = 0);                    // activates the trigger, fires immediately or after the optional delay [milliseconds]
+  void activate(int64_t currentMicros, unsigned int delayMs); // more efficient: activates using provided current time [microseconds]
+  void expire();                                              // disables the trigger
+
+  bool isExpired(); // returns true if the trigger is expired/disabled (inverse of `isActive()`)
+  bool isActive();  // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
 
   private:
   // Internally, the `checkToggle()` represents three states:
@@ -225,7 +232,8 @@ class FrequencyToggler2 {
   bool stateIsOn;
   _status status;
 
-  bool checkToggle_(int64_t currentMicros); // Internal: does not check expiry
+  void activate_(int64_t currentMicros, unsigned int delayMs); // Internal activate implementation: does not check need for activation (i.e. zero lifetime)
+  bool checkToggle_(int64_t currentMicros);                    // Internal: does not check expiry
   void advanceState(int64_t currentMicros);
 };
 
@@ -280,11 +288,15 @@ class FrequencyToggler {
   bool isCurrentStateOn();
 
   // Lifecycle functions
-  void activate(unsigned int delayMs = 0); // activates the trigger (after optional delay [milliseconds])
-  void expire();                           // disables the trigger
-  bool isExpired();                        // returns true if the trigger is expired/disabled (inverse of `isActive()`)
-  bool isActive();                         // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
+  void activate(unsigned int delayMs = 0);                    // activates the trigger, fires immediately or after the optional delay [milliseconds]
+  void activate(int64_t currentMicros, unsigned int delayMs); // more efficient: activates using provided current time [microseconds]
+  void expire();                                              // disables the trigger
+
+  bool isExpired(); // returns true if the trigger is expired/disabled (inverse of `isActive()`)
+  bool isActive();  // returns true if the trigger is active (irrespective whether the toggler's state is on or off)
 
   private:
   FrequencyToggler2 frequencyToggler2_;
+
+  void activate_(int64_t currentMicros, unsigned int delayMs); // Internal activate implementation: does not check need for activation (i.e. zero lifetime)
 };
