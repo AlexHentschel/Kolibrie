@@ -2,7 +2,11 @@
 #include <U8g2lib.h>
 #include <memory>
 
-// WIFI
+// ESP32 Watchdog Timer (TWDT): allows monitoring FreeRTOS tasks and trigger a system reset if a task
+// runs too long without yielding, preventing system hangs from infinite loops or blocked code.
+#include <esp_task_wdt.h>
+
+// WIFI (headers included but not yet used - planned for future network functionality)
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
@@ -12,6 +16,7 @@
 
 // Custom utils
 #include "ConsoleUtils.h"
+#include "DebugUtils.h"
 #include "Display.h"
 #include "ErrDisplay.h"
 #include "ErrorMessages.h"
@@ -41,19 +46,28 @@ static U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 
 /* DS18B20 Temperature Sensor
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+// Sanity check: DS18B20 valid range is -55°C to +125°C according to datasheet
+// https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
+// If we get values outside this range, something is wrong (sensor malfunction, connection issue, etc.)
+static constexpr float TEMP_SENSOR_LOEWEST_VALID = -55.0f; // if DS18B20 returns a value strictly smaller than this, something is wrong
+static constexpr float TEMP_SENSOR_LARGEST_VALID = 125.0f; // if DS18B20 returns a value strictly larger than this, something is wrong
+
 static constexpr uint8_t TEMPERATURE_SENSOR_GPIO = 2; // DS18B20 is connected to GPIO 2; this is the port for the OneWire bus
 static constexpr uint8_t TEMPERATURE_PRECISION = 10;  // select 10 bit precision for DS18B20 (available range is 9 to 12 bits): corresponds to 0.25°C resolution with 187.5 ms measurement duration
 static OneWire temperatureSensorBus(TEMPERATURE_SENSOR_GPIO);
 static DallasTemperature temperatureSensors(&temperatureSensorBus);
 
-static DeviceAddress tempSensorDeviceAddress; // set by the initialization codefor DS18B20; the address (8 bytes) is provided by DallasTemperature library
+static DeviceAddress tempSensorDeviceAddress; // set by the initialization code for DS18B20; the address (8 bytes) is provided by DallasTemperature library
 
-// Reading temperatures with the DallasTemperature library is a two setp process for efficiency:
+// Reading temperatures with the DallasTemperature library is a two step process for efficiency:
 // 1. Request temperature measurement (non-blocking, when `waitForConversion` is set to false) via
 //    methods `requestTemperaturesByAddress` or `requestTemperatures` or `requestTemperaturesByIndex`
 // 2. After sufficient time has passed for the measurement to complete, retrieve the temperature via
 //    `getTempC` or `getTempF`. In our case, the waittime is at least 187.5ms, as we use 10-bit precision.
-static FrequencyTrigger requestTempRead(FrequencyUtils::unbounded_lifetime, 1000u); // read temperature every 1s, unbounded lifetime
+// We request temperature measurement every 1s, and afte a sufficient delay (see `TEMP_READ_DELAY_MS` below), we
+// retrieve the result requested temperature.
+static constexpr unsigned int REQUEST_TEMP_INTERVAL_MS = 1000u;
+static FrequencyTrigger requestTempRead(FrequencyUtils::unbounded_lifetime, REQUEST_TEMP_INTERVAL_MS); // read temperature every 1s, unbounded lifetime
 
 // milliseconds to wait after requesting temperature read before retrieving it.  In our case, the
 // waittime is at least 187.5ms, as we use 10-bit precision. We add about 20% margin to be safe.
@@ -67,8 +81,11 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 
 /* Heating control
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-static constexpr float TEMP_LIMIT_HEATING_ON = 5.0f;  // Temperature [°C] below which heating is turned ON
-static constexpr float TEMP_LIMIT_HEATING_OFF = 8.0f; // Temperature [°C] above which heating is turned OFF
+// static constexpr float TEMP_LIMIT_HEATING_ON = 5.0f;  // Temperature [°C] below which heating is turned ON
+// static constexpr float TEMP_LIMIT_HEATING_OFF = 8.0f; // Temperature [°C] above which heating is turned OFF
+
+static constexpr float TEMP_LIMIT_HEATING_ON = 20.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_OFF = 30.0f; // Temperature [°C] above which heating is turned OFF
 
 // EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
 // after a step change of the input, it takes about 50 samples to move the ouput approx. 63% of the way from the old to the new value.
@@ -79,11 +96,10 @@ static Ewma tempEwma(0.02);
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static constexpr uint8_t BLUE_LED_BUILTIN = 8; // GPIO 8, Blue LED: LOW = on, HIGH = off
 
-// LEDs' blinking patterns to indicate that temperature was measured successfully
-// blinking patter ("-" denoting LED on for 500ms, "." denoting LED off for 200ms):  - . -
-// ⇒ lifetime 1200ms for single measurement success indication
-// This is only activated after the temperature was successfully measured.
-static LEDExpiringToggler tempMeasurementSuccess(BLUE_LED_BUILTIN, 1200, 500, 200, LedUtils::LOW_IS_ON);
+// LEDs' blinking patterns to indicate that temperature was measured SUCCESSFULLY.
+// The entire lifetime of this blinker is 100ms. It is configured to turn the LED on for 100ms on and then keep it off
+// for the next 500ms (and repeat). Due to the short lifetime, in practice this translates to a single blink of 100ms.
+static LEDExpiringToggler tempMeasurementSuccess(BLUE_LED_BUILTIN, 100, 100, 500, LedUtils::LOW_IS_ON);
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -96,7 +112,10 @@ static constexpr uint8_t EXT_LOAD_SWITCH = 1; // GPIO 1 controls the external lo
 #define EXT_LOAD_OFF LOW
 
 // For testing purposes, we are "misusing" an LED toggler to control the external load logic
-LEDExpiringToggler *extLoadToggler = nullptr; // TODO: remove
+// Note: This is for testing only. Actual heating control is in the temperature control logic (loop function).
+// Stack-allocated to avoid memory leak.
+// Toggling GPIO 1, which connects to Mosfet
+static LEDExpiringToggler extLoadToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
 
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -115,6 +134,12 @@ std::unique_ptr<ErrDisplay> errDisplay = nullptr;
 
 /* Misc
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+// Heap monitoring for debugging and long-term stability tracking
+// Prints free heap memory approximately every 10 minutes to detect potential memory leaks or fragmentation.
+// We use an a primer number as time interval to avoid synchronization with other periodic tasks.
+// static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 602143u; // terigger every 10mins and 2.143s
+static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 60133u; // terigger every 1mins and 133ms
+static FrequencyTrigger heapMonitor(FrequencyUtils::unbounded_lifetime, HEAP_MONITOR_INTERVAL_MS);
 
 int64_t startMicros = 0;
 int testStateCounter = 0;
@@ -125,21 +150,45 @@ int testStateCounter = 0;
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 float initTemperatureSensor();
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, bool printFahrenheit = false);
+void printTemperature(float tempC, bool printFahrenheit /* = false */);
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
 void printDeviceAddress(const DeviceAddress address);
 void displayErrorAndHalt(const String &errorMessage);
+void inline debug_print_millis_since_startup(int64_t currentMicros);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 void setup() {
   Serial.begin(115200);
-#if defined(DEBUG)
-  delay(1000); // provide some time for Monitor to connect
-#endif
+  debug_do([]() { // allows some time for Serial Monitor to connect
+    delay(1000);
+  });
 
   Serial.println(F("Hello, blink blink blink ;-)\n"));
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ GPIO Initialization ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  pinMode(BLUE_LED_BUILTIN, OUTPUT);
+  pinMode(EXT_LOAD_SWITCH, OUTPUT);
+  digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF); // Ensure heating is off at startup
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout
+  // This ensures the system will reset if the main loop hangs for any reason
+  // Notes (based on https://forum.arduino.cc/t/watchdog-reset-esp32-if-stuck-more-than-120-seconds/1266565/2 ):
+  // • There's no need to call `esp_task_wdt_reset` from `loop`, as long as we call `enableLoopWDT` from `setup`. This is because
+  //   the wrapper in `main.cpp` that calls `setup` and `loop` also calls `esp_task_wdt_reset` automatically with this setup:
+  //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
+  // • Calling `enableLoopWDT` will automatically add the current task (also executing the `loop` function) to the watchdog,
+  //   so we don't need to call `esp_task_wdt_add(NULL)` here.
+  // • Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct, but does not
+  //   store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated struct here.
+  esp_task_wdt_config_t wdtConfig = {
+      .timeout_ms = 10000,
+      .trigger_panic = true,
+  };
+  esp_task_wdt_init(&wdtConfig); // safe to pass pointer to stack allocated struct
+  enableLoopWDT();               // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // STARTUP BLINKER:: signals is starting up
@@ -155,9 +204,6 @@ void setup() {
     }
   } // startupBlinker on stack automatically destroyed here when leaving scope
 
-  /* ── Toggling GPIO 1, which connects to Mosfet ─────────── */
-  extLoadToggler = new LEDExpiringToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
-
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
@@ -168,7 +214,7 @@ void setup() {
 
   // contrast (i.e. brightness) on OLED displays is controlled by the current supplied to the organic light-emitting diodes.
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
-  u8g2.setContrast(3); // set contrast to maximum
+  u8g2.setContrast(3); // set contrast to very low (3 out of 255) to preserve display lifespan and reduce power consumption
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
@@ -181,92 +227,84 @@ void setup() {
   statDisplay.setTemp(currentTempC);
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
+  // Start timing of various tasks. We choose a prime numbers for startup delays with sufficient
+  // gaps in order to avoid tasks triggering too closely to each other.
   consolePrintLifeSign->activate(startMicros, 293u);
   requestTempRead.activate(startMicros, 661u);
+  heapMonitor.activate(startMicros, 1277u); // heap report about 600ms after requesting temperature read
 
-  // tempMeasurementSuccess.activate();
-  extLoadToggler->activate();
+  // For testing: activate the external load toggler (this simulates heating on/off for testing)
+  // In production, remove this and rely only on the temperature-based heating control in loop()
+  // extLoadToggler.activate();
 
+  startMicros = esp_timer_get_time(); // Initialize global startMicros for loop() timing checks
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
-/*
- * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 
-void loop() { /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+// Task Watchdog Timer (TWDT) automatically reset when entering the `loop` function by the framework.
+void loop() {
   int64_t currentMicros = esp_timer_get_time();
 
+  // Requesting temperature measurement:
+  if (requestTempRead.checkTrigger(currentMicros)) {
+    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress);
+    retrieveTemp.activate(currentMicros, TEMP_READ_DELAY_MS); // configured to auto-expire after a single trigger
+    debug_do([&]() {
+      Serial.print((currentMicros - startMicros) / 1000LL);
+      Serial.println(F("\trequesting temp measurement"));
+    });
+  }
+
+  // Retrieving temperature measurement result and processing it:
   if (retrieveTemp.checkTrigger(currentMicros)) {
-    float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
-    if (!std::isfinite(tempC)) { // retrieving temperature failed
-      ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
-      displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
-    }
+    float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // sanity check inside
+    debug_do([&]() {
+      Serial.print((currentMicros - startMicros) / 1000LL);
+      Serial.print(F("\ttemp reading: "));
+      printTemperature(tempC, true);
+      Serial.println();
+    });
 
     float smoothedTemp = tempEwma.update(tempC);
     statDisplay.setTemp(smoothedTemp);
 
-    // Heating control logic
-    // To avoid hysteresis: don't change state if between limits
-    if (smoothedTemp < TEMP_LIMIT_HEATING_ON) { // Temperature too low: make sure heating is on
+    // Heating control logic with hysteresis to avoid rapid cycling
+    // We don't change state if temperature is between the two limits
+    if (smoothedTemp < TEMP_LIMIT_HEATING_ON) { // Temperature too low: turn heating ON
+      digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_ON);
       statDisplay.setHeatingStatus(true);
-    } else if (smoothedTemp > TEMP_LIMIT_HEATING_OFF) { // Temperature high enough: make sure heating is off
+    } else if (smoothedTemp > TEMP_LIMIT_HEATING_OFF) { // Temperature high enough: turn heating OFF
+      digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF);
       statDisplay.setHeatingStatus(false);
     }
 
     tempMeasurementSuccess.activate();
   }
 
-  if (requestTempRead.checkTrigger(currentMicros)) {
-    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress);
-
-    retrieveTemp.activate(currentMicros, TEMP_READ_DELAY_MS);
-  }
-
   // Serial.print(F("  Current temperature: "));
   // Serial.print(tempC);
   // Serial.print(F(" C / "));
 
-  // errDisplay->checkRedraw(currentMicros);
-
-  // statDisplay->checkRedraw(currentMicros);
-
-  // if ((currentMicros - startMicros > 10000000) && (testStateCounter == 0)) {
-  //   statDisplay->setHeatingStatus(false);
-  //   statDisplay->setTemp(1.23);
-  //   Serial.println(F("transitioning 1 -> 2"));
-  //   testStateCounter = 1;
-  // }
-
-  // if ((currentMicros - startMicros > 20000000) && (testStateCounter == 1)) {
-  //   statDisplay->setWifiStatus(false);
-  //   statDisplay->setTemp(-17.1);
-  //   Serial.println(F("transitioning 2 -> 3"));
-  //   testStateCounter = 2;
-  // }
-
-  // if ((currentMicros - startMicros > 30000000) && (testStateCounter == 2)) {
-  //   statDisplay->setWifiStatus(true);
-  //   statDisplay->setTemp(-3.4);
-  //   Serial.println(F("transitioning 3 -> 4"));
-  //   testStateCounter = 3;
-  // }
-
-  // if ((currentMicros - startMicros > 40000000) && (testStateCounter == 3)) {
-  //   statDisplay->setHeatingStatus(true);
-  //   statDisplay->setTemp(-0.4);
-  //   Serial.println(F("transitioning 4 -> 5"));
-  //   testStateCounter = 4;
-  // }
-
   statDisplay.checkRedraw(currentMicros);
   tempMeasurementSuccess.checkToggleLED(currentMicros);
-  if (extLoadToggler) {
-    extLoadToggler->checkToggleLED(currentMicros);
-  }
+
+  // For testing only: uncomment to enable toggling of external load for testing purposes
+  // In production, the heating is controlled by the temperature logic above
+  // extLoadToggler.checkToggleLED(currentMicros);
+
   consolePrintLifeSign->checkConsolePrint(currentMicros);
+
+  // Heap monitoring for debugging and detecting memory leaks over long operation periods
+  if (heapMonitor.checkTrigger(currentMicros)) {
+    Serial.print(F("HEAP MONITOR: "));
+    Serial.print(ESP.getFreeHeap());
+    Serial.print(F(" bytes of free heap; "));
+    Serial.print(ESP.getMinFreeHeap());
+    Serial.println(F(" bytes of minimum free heap recorded since startup"));
+  }
 }
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
@@ -319,7 +357,7 @@ uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressO
   uint8_t count = 0;
 
   if (bus.search(addressOut)) {
-    Serial.println(F("Devices with addresses found on OneWire bus:"));
+    Serial.println(F("Device(s) on OneWire bus found with addresses:"));
     do {
       count++;
       Serial.print(F("   "));
@@ -358,7 +396,6 @@ void printDeviceAddress(const DeviceAddress address) {
  *  • The sensor is initialized with the precision defined by the `TEMPERATURE_PRECISION` constant.
  *    Currently: 0.25°C resolution requiring 187.5 ms measurement duration
  *  • The address of the sensor is stored in the global variable `tempSensorDeviceAddress`.
- *
  */
 float initTemperatureSensor() {
   Serial.print(F("Scanning for OneWire devices on GPIO pin "));
@@ -408,7 +445,7 @@ float initTemperatureSensor() {
   // Note on `skipGlobalBitResolutionCalculation` parameter:
   // When skipGlobalBitResolutionCalculation is set to true, the function will only set the resolution for the targeted device and will not recalculate or update the overall (global) bit
   // resolution for all devices on the bus. This can be useful for performance reasons or when you want to manage device resolutions individually without affecting the global setting.
-  // Conversely, if skipGlobalBitResolutionCalculation is false, the function will update the global bit resolution variable after successfully setting the device's resolution. It will als
+  // Conversely, if skipGlobalBitResolutionCalculation is false, the function will update the global bit resolution variable after successfully setting the device's resolution. It will also
   // scan all devices to ensure the global bit resolution reflects the highest resolution among all connected sensors. This ensures consistency when reading temperatures from multiple devices.
   temperatureSensors.setResolution(tempSensorDeviceAddress, TEMPERATURE_PRECISION);
 
@@ -418,56 +455,76 @@ float initTemperatureSensor() {
     ErrorMessages::PrecisionSettingError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress, TEMPERATURE_PRECISION, actualPrecision);
     displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
-  Serial.print(F("Sensor operating with precision of "));
+  Serial.print(F("Successfully set temperature sensor to precision of "));
   Serial.print(actualPrecision, DEC);
-  Serial.print(F(" bits."));
+  Serial.println(F(" bits."));
 
   // Happy path: initial temperature read
+  // • Request temperature measurement.
+  // • Wait sufficient time for measurement to complete.
+  // • As a sanity check, we measure and log the time taken for the initial temperature read. For normal operations
+  //   we must ensure that the delay is short enough compared to the desired periodicity of the temperature read.
+  //   As a sanity check, we require that the delay is less than 75% of the request interval.
+  //   Given the delay `REQUEST_TEMP_INTERVAL_MS` (unsigned int value), 75% of this can be efficiently computed as
+  //   `REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)` using bit shift for division by 4.
+  // • Read temperature and log the current value to Serial console.
   temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
-  delay(200);                                                               // Wait for temperature read to complete (at 10-bit: ~187.5ms)
-
-  float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
-  if (!std::isfinite(tempC)) {
-    ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+  int64_t tstart = esp_timer_get_time();
+  int64_t timeout = tstart + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - REQUEST_TEMP_INTERVAL_MS >> 2);
+  retrieveTemp.activate(TEMP_READ_DELAY_MS); // Wait for temperature read to complete (at 10-bit this should be ~187.5ms)
+  while (!retrieveTemp.checkTrigger()) {
+    int64_t t = esp_timer_get_time();
+    if (retrieveTemp.checkTrigger()) break;
+    if (esp_timer_get_time() > timeout) {
+      ErrorMessages::TemperatureDelayError::build(ErrorMessages::errorBuffer, TEMP_READ_DELAY_MS);
+      displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    }
+    delay(3);
   }
-  Serial.print(F(" Current temperature: "));
+  int64_t delta = esp_timer_get_time() - tstart; // delay in MICROseconds
+  Serial.print(F("Operating with a delay of "));
+  Serial.print(delta / 1000LL); // convert delay to milliseconds
+  Serial.println(F("ms between requesting and retrieving temperature measurement."));
+
+  float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // read temperature; in case of error: blocks and displays error display indefinitely
+  Serial.print(F("Current temperature: "));
   Serial.print(tempC);
   Serial.print(F(" C / "));
   Serial.print(DallasTemperature::toFahrenheit(tempC));
-  Serial.print(F(" F"));
-  Serial.println();
-  Serial.println(F("DS18B20 temperature sensor successfully initialized"));
-  Serial.println();
+  Serial.println(F(" F"));
 
-  while (true) {
-    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
-    retrieveTemp.activate(TEMP_READ_DELAY_MS);
+  // TODO: for debuging and testing, to be removed
+  // while (true) {
+  //   Serial.print(F(" requesting temp ..."));
+  //   temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
+  //   retrieveTemp.activate(TEMP_READ_DELAY_MS);
 
-    while (!retrieveTemp.checkTrigger()) { // Wait for temperature read to complete (at 10-bit: ~187.5ms)
-      delay(3);
-    }
-    float tempC = printTemperature(temperatureSensors, tempSensorDeviceAddress);
+  //   while (!retrieveTemp.checkTrigger()) { // Wait for temperature read to complete (at 10-bit: ~187.5ms)
+  //     delay(3);
+  //   }
+  //   Serial.print(F(" reading temp: "));
+  //   float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress);
+  //   printTemperature(tempC, true);
+  //   Serial.println();
 
-    return tempC;
-  }
+  //   delay(5000);
+  // }
+
+  Serial.println(F("DS18B20 temperature sensor successfully initialized\n"));
+  return tempC;
 }
 
-// printTemperature
-// • measured the temperature,
-// • prints the temperature to Serial console in units of Celsius and optionally Fahrenheit (off by default),
-// • in case of error (e.g., sensor disconnected), an error message is printed instead
-// • returns the temperature in Celsius as float; in case of error, NaN is returned
-// CAUTION: we have set `waitForConversion` to false, i.e. temperature measurements are non-blocking. Specifically, they
-// must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
-float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, bool printFahrenheit /* = false */) {
-  float tempC = sensors.getTempC(deviceAddress);
-  if (tempC != DEVICE_DISCONNECTED_C) {
+// printTemperature prints the temperature to Serial console in units of Celsius and optionally Fahrenheit
+// (off by default). In case of error (e.g., sensor disconnected), an error message is printed instead.
+// CAUTION: does not print new line at the end.
+void printTemperature(float tempC, bool printFahrenheit /* = false */) {
+  if (!std::isfinite(tempC)) {
     Serial.println();
-    Serial.print(F("ERROR: reading temperature failed with value "));
+    Serial.print(F("ERROR: temperature measurement failed with value "));
     Serial.println(tempC);
-    return NAN;
+    return;
   }
+
   Serial.print(tempC);
   Serial.print(F(" C"));
   if (printFahrenheit) {
@@ -475,19 +532,35 @@ float printTemperature(DallasTemperature &sensors, DeviceAddress deviceAddress, 
     Serial.print(DallasTemperature::toFahrenheit(tempC));
     Serial.print(F(" F"));
   }
-  return tempC;
 }
 
 // readTemp retrieves the temperature and returns the temperature in Celsius as float or NAN in case of error.
+// We return -∞ or +∞ in case the temperature read is outside the valid range.
 // CAUTION: we have set `waitForConversion` to false, i.e. temperature measurements are non-blocking. Specifically, they
 // must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
-  if (tempC != DEVICE_DISCONNECTED_C) {
-    return NAN;
+
+  // Sanity check that temperature read is within valid range:
+  if (tempC == DEVICE_DISCONNECTED_C) tempC = NAN;
+  if (tempC < TEMP_SENSOR_LOEWEST_VALID) tempC = -INFINITY;
+  if (tempC > TEMP_SENSOR_LARGEST_VALID) tempC = INFINITY;
+  if (!std::isfinite(tempC)) {
+    ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
+    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
+
   return tempC;
 }
 
-// NOTEs:
-// example for displaying temperature on web server hosted by the MCU: https://randomnerdtutorials.com/esp32-ds18b20-temperature-arduino-ide/
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Notes ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+• example for displaying temperature on web server hosted by the MCU: https://randomnerdtutorials.com/esp32-ds18b20-temperature-arduino-ide/
+
+
+
+*/
+
+// TODO
+// CAUTION: C++ does not require that an implementation supports infinity. However, the std::numeric_limits<T>::is_iec559 check can confirm IEEE 754 compliance, which is standard on most modern platforms.
+// std::numeric_limits<T>::is_iec559

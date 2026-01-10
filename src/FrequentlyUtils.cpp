@@ -359,7 +359,7 @@ void FrequencyToggler2::advanceState(int64_t currentMicros) {
 
       // Compute next speculative next trigger time, by doubling the accumulated advance and adding it to the current value of `nextTriggerAtOrAfterMicros`.
       // In practise, this value should not overflow, because the 64-bit integer used here to track microseconds can cover hundred thousands of years.
-      // If this overflows, it is a usage bug - and not a logical bug inside the module here.      
+      // If this overflows, it is a usage bug; but not a logical bug inside the module here.
       accumulatedAdvanceMicros <<= 1;
       speculativeNextTrigger = nextTriggerAtOrAfterMicros + accumulatedAdvanceMicros;
     }

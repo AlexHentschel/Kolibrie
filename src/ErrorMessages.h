@@ -21,6 +21,43 @@
 // TRUNCATION HANDLING: If a message would exceed the buffer size, it will be truncated and the special
 // character '»' (ASCII 187) will be appended as the last character before the null terminator to indicate
 // truncation occurred.
+//
+// ═══════════════════════════════════ USAGE EXAMPLES ═══════════════════════════════════════════════
+//
+// BASIC USAGE - Build an error message into the static buffer:
+//
+//   // Example 1: Device count mismatch (expected 1 device on GPIO 2, found 0)
+//   ErrorMessages::DeviceCountError::build(ErrorMessages::errorBuffer, 2, 0);
+//   displayErrorAndHalt(String(ErrorMessages::getBuffer()));
+//   // Output: " Expected 1 device on GPIO 2, found 0!"
+//
+//   // Example 2: Temperature read failed with NaN value
+//   ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, NAN);
+//   Serial.println(ErrorMessages::getBuffer());
+//   // Output: " Temperature read failed with value nan!"
+//
+//
+// DIRECT USAGE - Using const char* pointer directly (without String wrapper):
+//
+//   // The buffer can be used directly with functions accepting const char*
+//   ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
+//   Serial.println(ErrorMessages::getBuffer());  // Serial.println accepts const char*
+//   logToFile(ErrorMessages::getBuffer());       // Custom functions can accept const char*
+//
+// ADVANCED USAGE - Query worst-case lengths at compile time:
+//
+//   // Get the maximum possible length for a specific error type (evaluated at compile time)
+//   constexpr size_t maxLen = ErrorMessages::DeviceCountError::worstCaseLength();
+//   // For DeviceCountError, uses worst-case GPIO (255) and device count (255)
+//
+// MEMORY SAFETY GUARANTEES:
+//   • Zero heap allocations - All error messages use the static 150-byte buffer
+//   • Zero fragmentation risk - Perfect for systems running days/weeks/months continuously
+//   • Compile-time validation - static_assert ensures all messages fit within buffer
+//   • Graceful truncation - Messages too long are truncated with '»' indicator
+//   • Platform independent - Automatically adapts to 16-bit, 32-bit, or 64-bit architectures
+//
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
 
 namespace ErrorMessages {
   constexpr size_t BUFFER_SIZE = 150;
@@ -92,9 +129,9 @@ namespace ErrorMessages {
 
   // Calculate maximum buffer size needed for int-to-string conversion at compile time.
   // We use exact values derived from the mathematical maximum for each integer width:
-  //   - 16-bit signed int: -32768 → 6 chars (5 digits + sign + null = 7 bytes)
-  //   - 32-bit signed int: -2147483648 → 11 chars (10 digits + sign + null = 12 bytes)
-  //   - 64-bit signed int: -9223372036854775808 → 20 chars (19 digits + sign + null = 21 bytes)
+  //   • 16-bit signed int: -32768 → 6 chars (5 digits + sign + null = 7 bytes)
+  //   • 32-bit signed int: -2147483648 → 11 chars (10 digits + sign + null = 12 bytes)
+  //   • 64-bit signed int: -9.22 · 10^18 → 20 chars (19 digits + sign + null = 21 bytes)
   //
   // Note: We cannot use log10() as it's not constexpr until C++26. Instead, we use the
   // mathematically derived digit count for INT_MIN at each common integer width.
@@ -104,12 +141,29 @@ namespace ErrorMessages {
   //   Simplified to: bits / 3 + 3 (slightly conservative, adds 1-2 extra bytes)
   //   This accounts for: digits + sign + null terminator
   constexpr size_t INT_STRING_BUFFER_SIZE =
-      sizeof(int) == 2 ? 7 : // 16-bit: "-32768\0"
-          sizeof(int) == 4 ? 12
-                           : // 32-bit: "-2147483648\0"
-          sizeof(int) == 8 ? 21
-                           :       // 64-bit: "-9223372036854775808\0"
-          sizeof(int) * 8 / 3 + 3; // Fallback approximation for exotic platforms
+      sizeof(int) == 2 ? 7 :                        // 16-bit: "-32768\0"
+          sizeof(int) == 4 ? 12                     // 32-bit: "-2147483648\0"
+      : sizeof(int) == 8   ? 21                     // 64-bit: "-9223372036854775808\0"
+                           : sizeof(int) * 8 / 3 + 3; // Fallback approximation for exotic platforms
+
+  // Calculate maximum buffer size needed for unsigned int-to-string conversion at compile time.
+  // We use exact values derived from the mathematical maximum for each integer width:
+  //   • 16-bit unsigned int: 65535 → 5 chars (5 digits + null = 6 bytes)
+  //   • 32-bit unsigned int: 4294967295 → 10 chars (10 digits + null = 11 bytes)
+  //   • 64-bit unsigned int: 1.8 · 10^19 → 20 chars (20 digits + null = 21 bytes)
+  //
+  // Note: We cannot use log10() as it's not constexpr until C++26. Instead, we use the
+  // mathematically derived digit count for UINT_MAX at each common integer width.
+  //
+  // The fallback uses a heuristic approximation based on:
+  //   Formula: ceil(log₁₀(2**bits)) + 1 = ceil(bits * log₁₀(2)) + 1 = ceil(bits × 0.30103) + 1
+  //   Simplified to: bits / 3 + 2 (slightly conservative, adds 1 extra byte)
+  //   This accounts for: digits + null terminator (no sign needed for unsigned)
+  constexpr size_t UINT_STRING_BUFFER_SIZE =
+      sizeof(unsigned int) == 2 ? 6 :                                 // 16-bit: "65535\0"
+          sizeof(unsigned int) == 4 ? 11                              // 32-bit: "4294967295\0"
+      : sizeof(unsigned int) == 8   ? 21                              // 64-bit: "18446744073709551615\0"
+                                    : sizeof(unsigned int) * 8 / 3 + 2; // Fallback approximation for exotic platforms
 
   // Calculate the string length of a formatted DeviceAddress at compile time.
   // DeviceAddress is typedef uint8_t DeviceAddress[8], formatted as "XX.XX.XX.XX.XX.XX.XX.XX"
@@ -145,7 +199,7 @@ namespace ErrorMessages {
                          constexpr_max(overflowLength, normalLength));
   }
 
-  /* ━━━━━━━━━━━━━━━━━━━━━━━━ RUNTIME BUFFER HELPERS ━━━━━━━━━━━━━━━━━━━━━━━━ */
+  /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ RUNTIME BUFFER HELPERS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   // All write functions respect buffer boundaries and will truncate gracefully if needed.
   // After truncation, the TRUNCATION_MARKER character is added before the null terminator.
 
@@ -199,15 +253,39 @@ namespace ErrorMessages {
     return true;
   }
 
-  // Write integer to buffer at current position, advance position
+  // Write integer to buffer at current position, advance position.
   // Uses Arduino's itoa() function which handles all edge cases including INT_MIN.
   // Returns true if fully written, false if truncated
   //
-  // FUTURE-PROOFING: Buffer size is calculated at compile time based on platform's int size.
-  // Works correctly on both 32-bit (12 bytes) and 64-bit (22 bytes) platforms.
+  // FUTURE-PROOFING: Buffer size is calculated at compile time based on
+  // platform's int size. Works correctly on 16-bit, 32-bit, and 64-bit platforms.
   inline bool writeInt(char *buffer, size_t &pos, int value) {
     char temp[INT_STRING_BUFFER_SIZE]; // stack-allocated buffer
     itoa(value, temp, 10);             // Convert to base-10 decimal string
+
+    // Copy result to buffer
+    // Happy path: write while we have space for at least 1 char + null terminator
+    const char *p = temp;
+    while (*p != '\0' && hasSpace(pos, 1)) {
+      buffer[pos++] = *p++;
+    }
+
+    if (*p != '\0') { // Check if we truncated, and insert truncation marker if needed
+      markTruncation(buffer, pos);
+      return false;
+    }
+    return true;
+  }
+
+  // Write unsigned integer to buffer at current position, advance position
+  // Uses Arduino's utoa() function which handles unsigned int conversion.
+  // Returns true if fully written, false if truncated
+  //
+  // FUTURE-PROOFING: Buffer size is calculated at compile time based on platform's
+  // unsigned int size.Works correctly on 16-bit, 32-bit, and 64-bit platforms.
+  inline bool writeUnsignedInt(char *buffer, size_t &pos, unsigned int value) {
+    char temp[UINT_STRING_BUFFER_SIZE]; // stack-allocated buffer
+    utoa(value, temp, 10);              // Convert to base-10 decimal string
 
     // Copy result to buffer
     // Happy path: write while we have space for at least 1 char + null terminator
@@ -254,8 +332,8 @@ namespace ErrorMessages {
     //
     // FLOAT PRECISION EDGE CASE: Due to float's limited precision (24-bit mantissa), INT_MAX
     // cannot be exactly represented in a float. For 32-bit int:
-    //   - INT_MAX = 2,147,483,647 (requires 31 bits)
-    //   - static_cast<float>(INT_MAX) ≈ 2,147,483,648.0 (rounds up to 2^31)
+    //   • INT_MAX = 2,147,483,647 (requires 31 bits)
+    //   • static_cast<float>(INT_MAX) ≈ 2,147,483,648.0 (rounds up to 2^31)
     // At this magnitude, consecutive representable floats are spaced 128 apart. This means
     // static_cast<float>(INT_MAX) actually produces a value GREATER than INT_MAX.
     // Therefore, we must use '>=' (not '>') to catch boundary cases where the float equals
@@ -337,7 +415,7 @@ namespace ErrorMessages {
     return true;
   }
 
-  /* ━━━━━━━━━━━━━━━━━━━━━━━━ ERROR MESSAGE DEFINITIONS ━━━━━━━━━━━━━━━━━━━━━━━━ */
+  /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ERROR MESSAGE DEFINITIONS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
   //
   // NOTE: String literals in constexpr declarations are automatically stored in flash memory
   // (PROGMEM) on Arduino/ESP32 platforms and only loaded into RAM when accessed. We cannot
@@ -345,7 +423,7 @@ namespace ErrorMessages {
   //   `F(…)` returns a special `__FlashStringHelper*` type at runtime, not a compile-time const `char*`
   // The compiler handles flash storage automatically for these string constants.
 
-  // Error 1: Device count mismatch
+  /* ────────────────────────────── Error: Device count mismatch ──────────────────────────────── */
   struct DeviceCountError {
     static constexpr const char *prefix = " Expected 1 device on GPIO "; // Stored in flash
     static constexpr const char *middle = ", found ";                    // Stored in flash
@@ -366,7 +444,7 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 2: Incompatible device address
+  /* ─────────────────────────── Error: Incompatible sensor address ───────────────────────────── */
   struct IncompatibleAddressError {
     static constexpr const char *prefix = " Incompatible device address "; // Stored in flash
 
@@ -383,7 +461,7 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 3: Unknown device type
+  /* ─────────────────────────────── Error: Unknown device type ───────────────────────────────── */
   struct UnknownDeviceError {
     static constexpr const char *prefix = " Unknown device type at address "; // Stored in flash
 
@@ -400,7 +478,7 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 4: Sensor disconnected after init
+  /* ────────────────────── Error: Sensor still not connected after init ──────────────────────── */
   struct SensorDisconnectedError {
     static constexpr const char *prefix = " DS18B20 Temp Sensor ";                    // Stored in flash
     static constexpr const char *suffix = " still disconnected after initialization"; // Stored in flash
@@ -419,7 +497,7 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 5: Parasite power mode
+  /* ────────────────────────── Error: Sensor in parasite power mode ──────────────────────────── */
   struct ParasitePowerError {
     static constexpr const char *prefix = " DS18B20 Temp Sensor ";             // Stored in flash
     static constexpr const char *suffix = " is reporting parasite power mode"; // Stored in flash
@@ -438,7 +516,7 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 6: Precision setting failed
+  /* ───────────────────── Error: Setting sensor precision setting failed ─────────────────────── */
   struct PrecisionSettingError {
     static constexpr const char *part1 = " Setting precision of DS18B20 Temp Sensor "; // Stored in flash
     static constexpr const char *part2 = " to ";                                       // Stored in flash
@@ -464,15 +542,11 @@ namespace ErrorMessages {
     }
   };
 
-  // Error 7: Temperature read failed
+  /* ───────────────────────────── Error: Temperature read failed ─────────────────────────────── */
   struct TemperatureReadError {
     static constexpr const char *prefix = " Temperature read failed with value "; // Stored in flash
 
     static constexpr size_t worstCaseLength() {
-      // Use the maximum length that writeFloat can produce, which handles all possible
-      // float values including special cases (nan, inf, overflow) and malfunction scenarios.
-      // For 32-bit int: maxFloatStringLength() = 14 (e.g., "-2147483647.99")
-      // For 64-bit int: maxFloatStringLength() = 23
       return const_strlen(prefix) + maxFloatStringLength() + 1; // term "+1" is tailing exclamation mark
     }
 
@@ -485,7 +559,25 @@ namespace ErrorMessages {
     }
   };
 
-  /* ━━━━━━━━━━━━━━━━━━━━━ COMPILE-TIME VALIDATION ━━━━━━━━━━━━━━━━━━━━━━━━ */
+  /* ──────────────────── Error: Delay for reading Temperature misconfigured ──────────────────── */
+  struct TemperatureDelayError {
+    static constexpr const char *prefix = " Temp Retrieval Delay misconfigured with value "; // Stored in flash
+    static constexpr const char *suffix = "ms!";                                             // Stored in flash
+
+    static constexpr size_t worstCaseLength() {
+      return const_strlen(prefix) + UINT_STRING_BUFFER_SIZE + const_strlen(suffix);
+    }
+
+    static void build(char *buffer, unsigned int configuredDelayMs) {
+      size_t pos = 0;
+      writeString(buffer, pos, prefix);
+      writeUnsignedInt(buffer, pos, configuredDelayMs);
+      writeString(buffer, pos, suffix);
+      buffer[pos] = '\0';
+    }
+  };
+
+  /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ COMPILE-TIME VALIDATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
   static_assert(DeviceCountError::worstCaseLength() < BUFFER_SIZE,
                 "DeviceCountError exceeds buffer size!");
@@ -507,5 +599,8 @@ namespace ErrorMessages {
 
   static_assert(TemperatureReadError::worstCaseLength() < BUFFER_SIZE,
                 "TemperatureReadError exceeds buffer size!");
+
+  static_assert(TemperatureDelayError::worstCaseLength() < BUFFER_SIZE,
+                "TemperatureDelayError exceeds buffer size!");
 
 } // namespace ErrorMessages
