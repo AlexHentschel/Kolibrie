@@ -2,10 +2,6 @@
 #include <U8g2lib.h>
 #include <memory>
 
-// ESP32 Watchdog Timer (TWDT): allows monitoring FreeRTOS tasks and trigger a system reset if a task
-// runs too long without yielding, preventing system hangs from infinite loops or blocked code.
-#include <esp_task_wdt.h>
-
 // WIFI (headers included but not yet used - planned for future network functionality)
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -13,6 +9,10 @@
 // DS18B20 Temperature Sensor Libraries
 #include "DallasTemperature.h"
 #include "OneWire.h"
+
+// ESP32 Watchdog Timer (TWDT): allows monitoring FreeRTOS tasks and trigger a system reset if a task
+// runs too long without yielding, preventing system hangs from infinite loops or blocked code.
+#include <esp_task_wdt.h>
 
 // Custom utils
 #include "ConsoleUtils.h"
@@ -28,12 +28,12 @@
 // Preprocessor Macros
 #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
 
-/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
 #include "WiFiCredentials.h"
 
 /* On-Board Screen (OLED 72x40)
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 static U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 // U8G2_R0 	No rotation, landscape
@@ -42,13 +42,18 @@ static U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R2, 6, 5, U8X8_PIN_NONE);
 // U8G2_R3 270 degree clockwise rotation
 
 /* Temperature Control
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 /* DS18B20 Temperature Sensor
- * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-// Sanity check: DS18B20 valid range is -55°C to +125°C according to datasheet
-// https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
-// If we get values outside this range, something is wrong (sensor malfunction, connection issue, etc.)
+ * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+// • An edge case we have seen is a constant reading of 25.0°C, which is a common default value the registers
+//   are initialzed with, but haven't been updated by successful temperature measurements. Common causes are improper
+//   wiring / broken sensor, or missing software requests via .
+// • For efficiency, we use ASYNCHRONOUS temperature reads, where in response to our non-blocking request, the sensor
+//   starts working and with some latency (details below) updates an internal register, which we can read later.
+// • Sanity check: DS18B20 valid range is -55°C to +125°C according to datasheet
+//   https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
+//   If we read values outside of this range, something is wrong (sensor malfunction, connection issue, etc.)
 static constexpr float TEMP_SENSOR_LOEWEST_VALID = -55.0f; // if DS18B20 returns a value strictly smaller than this, something is wrong
 static constexpr float TEMP_SENSOR_LARGEST_VALID = 125.0f; // if DS18B20 returns a value strictly larger than this, something is wrong
 
@@ -64,7 +69,7 @@ static DeviceAddress tempSensorDeviceAddress; // set by the initialization code 
 //    methods `requestTemperaturesByAddress` or `requestTemperatures` or `requestTemperaturesByIndex`
 // 2. After sufficient time has passed for the measurement to complete, retrieve the temperature via
 //    `getTempC` or `getTempF`. In our case, the waittime is at least 187.5ms, as we use 10-bit precision.
-// We request temperature measurement every 1s, and afte a sufficient delay (see `TEMP_READ_DELAY_MS` below), we
+// We request temperature measurement every 1s, and after a sufficient delay (see `TEMP_READ_DELAY_MS` below), we
 // retrieve the result requested temperature.
 static constexpr unsigned int REQUEST_TEMP_INTERVAL_MS = 1000u;
 static FrequencyTrigger requestTempRead(FrequencyUtils::unbounded_lifetime, REQUEST_TEMP_INTERVAL_MS); // read temperature every 1s, unbounded lifetime
@@ -84,8 +89,8 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 // static constexpr float TEMP_LIMIT_HEATING_ON = 5.0f;  // Temperature [°C] below which heating is turned ON
 // static constexpr float TEMP_LIMIT_HEATING_OFF = 8.0f; // Temperature [°C] above which heating is turned OFF
 
-static constexpr float TEMP_LIMIT_HEATING_ON = 20.0f;  // Temperature [°C] below which heating is turned ON
-static constexpr float TEMP_LIMIT_HEATING_OFF = 30.0f; // Temperature [°C] above which heating is turned OFF
+static constexpr float TEMP_LIMIT_HEATING_ON = 3.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
 
 // EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
 // after a step change of the input, it takes about 50 samples to move the ouput approx. 63% of the way from the old to the new value.
@@ -93,7 +98,7 @@ static constexpr float TEMP_LIMIT_HEATING_OFF = 30.0f; // Temperature [°C] abov
 static Ewma tempEwma(0.02);
 
 /* LEDs
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static constexpr uint8_t BLUE_LED_BUILTIN = 8; // GPIO 8, Blue LED: LOW = on, HIGH = off
 
 // LEDs' blinking patterns to indicate that temperature was measured SUCCESSFULLY.
@@ -102,7 +107,7 @@ static constexpr uint8_t BLUE_LED_BUILTIN = 8; // GPIO 8, Blue LED: LOW = on, HI
 static LEDExpiringToggler tempMeasurementSuccess(BLUE_LED_BUILTIN, 100, 100, 500, LedUtils::LOW_IS_ON);
 
 /* Controller for External Load -> GPIO
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // EXT_LOAD_SWITCH defines the GPIO that is used to control an external load attached.
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
 // power or not. Here, the micro-controller's GPIO (3.3V) controls the external load, but
@@ -118,7 +123,7 @@ static constexpr uint8_t EXT_LOAD_SWITCH = 1; // GPIO 1 controls the external lo
 static LEDExpiringToggler extLoadToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
 
 /* IO and APIs
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // prints life-signs to Serial console, unbounded runtime, print every 7331 milliseconds.
 // Notes:
 //  * Can be reassigned to display different messages during runtime
@@ -133,7 +138,7 @@ static StatDisplay statDisplay(u8g2, 700, 300);
 std::unique_ptr<ErrDisplay> errDisplay = nullptr;
 
 /* Misc
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // Heap monitoring for debugging and long-term stability tracking
 // Prints free heap memory approximately every 10 minutes to detect potential memory leaks or fragmentation.
 // We use an a primer number as time interval to avoid synchronization with other periodic tasks.
@@ -144,10 +149,10 @@ static FrequencyTrigger heapMonitor(FrequencyUtils::unbounded_lifetime, HEAP_MON
 int64_t startMicros = 0;
 int testStateCounter = 0;
 
-/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER INITIALIZATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER INITIALIZATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
 /* FUNCTION PROTOTYPES
- * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
+ * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 float initTemperatureSensor();
 void printTemperature(float tempC, bool printFahrenheit /* = false */);
@@ -158,39 +163,21 @@ void displayErrorAndHalt(const String &errorMessage);
 void inline debug_print_millis_since_startup(int64_t currentMicros);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 void setup() {
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Serial and GPIO Initialization ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   Serial.begin(115200);
+  pinMode(BLUE_LED_BUILTIN, OUTPUT);
+  pinMode(EXT_LOAD_SWITCH, OUTPUT);
+
+  digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF); // Ensure heating is off at startup
+
   debug_do([]() { // allows some time for Serial Monitor to connect
     delay(1000);
   });
-
   Serial.println(F("Hello, blink blink blink ;-)\n"));
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ GPIO Initialization ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  pinMode(BLUE_LED_BUILTIN, OUTPUT);
-  pinMode(EXT_LOAD_SWITCH, OUTPUT);
-  digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF); // Ensure heating is off at startup
-
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout
-  // This ensures the system will reset if the main loop hangs for any reason
-  // Notes (based on https://forum.arduino.cc/t/watchdog-reset-esp32-if-stuck-more-than-120-seconds/1266565/2 ):
-  // • There's no need to call `esp_task_wdt_reset` from `loop`, as long as we call `enableLoopWDT` from `setup`. This is because
-  //   the wrapper in `main.cpp` that calls `setup` and `loop` also calls `esp_task_wdt_reset` automatically with this setup:
-  //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
-  // • Calling `enableLoopWDT` will automatically add the current task (also executing the `loop` function) to the watchdog,
-  //   so we don't need to call `esp_task_wdt_add(NULL)` here.
-  // • Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct, but does not
-  //   store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated struct here.
-  esp_task_wdt_config_t wdtConfig = {
-      .timeout_ms = 10000,
-      .trigger_panic = true,
-  };
-  esp_task_wdt_init(&wdtConfig); // safe to pass pointer to stack allocated struct
-  enableLoopWDT();               // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
-
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ LEDs ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // STARTUP BLINKER:: signals is starting up
   // blinking patter ("-" denoting LED on for 150ms, "." denoting LED off for 100ms):  -. -. -. -
   // ⇒ lifetime 900ms
@@ -204,7 +191,7 @@ void setup() {
     }
   } // startupBlinker on stack automatically destroyed here when leaving scope
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Setup On-Board Screen (OLED 72x40) ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   u8g2.begin();
   u8g2.clearBuffer();
   u8g2.setBusClock(400000); // 400kHz I2C
@@ -216,17 +203,35 @@ void setup() {
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
   u8g2.setContrast(3); // set contrast to very low (3 out of 255) to preserve display lifespan and reduce power consumption
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
   tempEwma.reset(currentTempC);                 // initialize EWMA to start at the initial temperature reading
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
   statDisplay.setHeatingStatus(false);
   statDisplay.setWifiStatus(false);
   statDisplay.setTemp(currentTempC);
 
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout.
+  // This ensures the system will reset if the main loop hangs for any reason.
+  // Notes (based on https://forum.arduino.cc/t/watchdog-reset-esp32-if-stuck-more-than-120-seconds/1266565/2 ):
+  // • There's no need to call `esp_task_wdt_reset` from `loop`, as long as we call `enableLoopWDT` from `setup`. This is because
+  //   the wrapper in `main.cpp` that calls `setup` and `loop` also calls `esp_task_wdt_reset` automatically on every `loop` iteration.
+  //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
+  // • Calling `enableLoopWDT` will automatically add the current task (which subsequently will continue on to executing the
+  //   `loop` function) to the watchdog. So we don't need to call `esp_task_wdt_add(NULL)` here.
+  // • Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct, but does not
+  //   store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated struct here.
+  esp_task_wdt_config_t wdtConfig = {
+      .timeout_ms = 10000,
+      .trigger_panic = true,
+  };
+  esp_task_wdt_init(&wdtConfig); // safe to pass pointer to stack allocated struct
+  enableLoopWDT();               // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
+
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // Start timing of various tasks. We choose a prime numbers for startup delays with sufficient
   // gaps in order to avoid tasks triggering too closely to each other.
   consolePrintLifeSign->activate(startMicros, 293u);
@@ -241,9 +246,9 @@ void setup() {
   Serial.println(F("Done with setup. Kolibrie commencing operations!\n"));
 }
 
-/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // Task Watchdog Timer (TWDT) automatically reset when entering the `loop` function by the framework.
 void loop() {
   int64_t currentMicros = esp_timer_get_time();
@@ -299,7 +304,8 @@ void loop() {
 
   // Heap monitoring for debugging and detecting memory leaks over long operation periods
   if (heapMonitor.checkTrigger(currentMicros)) {
-    Serial.print(F("HEAP MONITOR: "));
+    Serial.print((currentMicros - startMicros) / 1000LL);
+    Serial.print(F(" HEAP MONITOR: "));
     Serial.print(ESP.getFreeHeap());
     Serial.print(F(" bytes of free heap; "));
     Serial.print(ESP.getMinFreeHeap());
@@ -307,12 +313,12 @@ void loop() {
   }
 }
 
-/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
 /* ...
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ DS18B20 Temperature Sensor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ DS18B20 Temperature Sensor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // Display error message on both Serial console and OLED, then halt execution.
 // It is recommended to start the error message with a leading blank. This helps when scrolling text,
@@ -385,7 +391,7 @@ void printDeviceAddress(const DeviceAddress address) {
   }
 }
 
-/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
 /* initTemperatureSensor scans the the OneWire and attempts to connect to the DS18B20 temperature sensor,
  * which is expected to be the only device on the bus. We verify the device is a compatible temperature
@@ -470,23 +476,23 @@ float initTemperatureSensor() {
   // • Read temperature and log the current value to Serial console.
   temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
   int64_t tstart = esp_timer_get_time();
-  int64_t timeout = tstart + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - REQUEST_TEMP_INTERVAL_MS >> 2);
+  int64_t timeout = tstart + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)) * 1000LL;
   retrieveTemp.activate(TEMP_READ_DELAY_MS); // Wait for temperature read to complete (at 10-bit this should be ~187.5ms)
-  while (!retrieveTemp.checkTrigger()) {
+  while (true) {
     int64_t t = esp_timer_get_time();
-    if (retrieveTemp.checkTrigger()) break;
-    if (esp_timer_get_time() > timeout) {
+    if (retrieveTemp.checkTrigger(t)) break; // updated temperature ready for retrieval
+    if (timeout < t) {                       // waiting for temperature read takes too long for stable operations!
       ErrorMessages::TemperatureDelayError::build(ErrorMessages::errorBuffer, TEMP_READ_DELAY_MS);
       displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
     }
     delay(3);
   }
   int64_t delta = esp_timer_get_time() - tstart; // delay in MICROseconds
-  Serial.print(F("Operating with a delay of "));
+  Serial.print(F("Operating with latency of "));
   Serial.print(delta / 1000LL); // convert delay to milliseconds
   Serial.println(F("ms between requesting and retrieving temperature measurement."));
 
-  float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // read temperature; in case of error: blocks and displays error display indefinitely
+  float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // in case of error: blocks and displays error display indefinitely
   Serial.print(F("Current temperature: "));
   Serial.print(tempC);
   Serial.print(F(" C / "));
@@ -534,10 +540,19 @@ void printTemperature(float tempC, bool printFahrenheit /* = false */) {
   }
 }
 
-// readTemp retrieves the temperature and returns the temperature in Celsius as float or NAN in case of error.
-// We return -∞ or +∞ in case the temperature read is outside the valid range.
-// CAUTION: we have set `waitForConversion` to false, i.e. temperature measurements are non-blocking. Specifically, they
-// must be requested via `requestTemperaturesByAddress` and need sufficient time to complete before calling this function.
+// readTemp retrieves the temperature and returns the temperature in Celsius as float.
+// We apply basic sanity checks on the read temperature value:
+//  • the read value is not DEVICE_DISCONNECTED_C (indicating sensor disconnected)
+//    as defined by the DallasTemperature library
+//  • the read value is in the closed interval [ TEMP_SENSOR_LOEWEST_VALID , TEMP_SENSOR_LARGEST_VALID ]
+//
+// ATTENTIONK: when a retrieved temp value is outside the valid range, we print an ERROR message to
+// Serial console and OLED display, and this function BLOCKs INDEFINITELY.
+//
+// REQUIREMENT:
+// This function expects that `waitForConversion` is set to false, i.e. temperature measurements are non-blocking.
+// Specifically, they must be requested via `requestTemperaturesByAddress` and need sufficient time to complete
+// before calling this function.
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
 
@@ -553,7 +568,7 @@ float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   return tempC;
 }
 
-/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Notes ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Notes ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
 
 • example for displaying temperature on web server hosted by the MCU: https://randomnerdtutorials.com/esp32-ds18b20-temperature-arduino-ide/
 
