@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include <esp_heap_caps.h>
 #include <memory>
 
 // WIFI (headers included but not yet used - planned for future network functionality)
@@ -174,7 +175,7 @@ float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
 void printDeviceAddress(const DeviceAddress address);
 void displayErrorAndHalt(const String &errorMessage);
-void inline debug_print_millis_since_startup(int64_t currentMicros);
+void runHeapMonitor(int64_t currentMicros);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -220,7 +221,7 @@ void setup() {
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
   // Note: initTemperatureSensor() halts on error, so if we reach the following line, `currentTempC` is valid
-  tempEwma.reset(currentTempC);                 // initialize EWMA filter to start at the initial temperature reading
+  tempEwma.reset(currentTempC); // initialize EWMA filter to start at the initial temperature reading
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
@@ -317,14 +318,18 @@ void loop() {
 
   consolePrintLifeSign->checkConsolePrint(currentMicros);
 
-  // Heap monitoring for debugging and detecting memory leaks over long operation periods
+  // Heap monitoring for debugging and detecting memory leaks and fragmentation over long operation periods
+  //
+  // Fragmentation occurs when free memory is split into many small, disconnected chunks rather than contiguous
+  // blocks. We detected memory fragmentation by comparing the total free heap against the largest contiguous block:
+  // • Low fragmentation: largest block ≲ total free (memory is contiguous)
+  // • High fragmentation: largest block ≪ total free (memory is scattered)
+  //
+  // Performance note: `heap_caps_get_largest_free_block()` walks the heap structure [cost: O(n) in number n of
+  // free blocks], but this is acceptable for periodic monitoring at longer intervals. Specifically because we
+  // expect a largely empty heap most of the time.
   if (heapMonitor.checkTrigger(currentMicros)) {
-    Serial.print((currentMicros - startMicros) / 1000LL);
-    Serial.print(F(" HEAP MONITOR: "));
-    Serial.print(ESP.getFreeHeap());
-    Serial.print(F(" bytes of free heap; "));
-    Serial.print(ESP.getMinFreeHeap());
-    Serial.println(F(" bytes of minimum free heap recorded since startup"));
+    runHeapMonitor(currentMicros);
   }
 }
 
@@ -334,41 +339,6 @@ void loop() {
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ DS18B20 Temperature Sensor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-
-// Display error message on both Serial console and OLED, then halt execution.
-// It is recommended to start the error message with a leading blank. This helps when scrolling text,
-// providing a space between the line leaving the display and the repeated message scrolling into the display.
-void displayErrorAndHalt(const String &errorMessage) {
-  // Print to Serial console
-  int64_t lastSerialPrintMicros = esp_timer_get_time();
-  Serial.println();
-  Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
-  Serial.println(errorMessage);
-  Serial.println(F("Halting execution."));
-
-  // Create and activate error display
-  DisplayText headline = DisplayText(u8g2, String(F(" ERROR")), 20);
-  DisplayText detailedMsg = DisplayText(u8g2, errorMessage, 16);
-  errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 20);
-
-  // Infinite loop: keep updating the error display
-  int64_t currentMicros;
-  while (true) {
-    // The error display needs to be called very frequently for smooth scrolling. In contrast, the console print of the error message is
-    // much less frequent and not particularly time sensitive. Since the check involves expensive 64-bit integer arithmetic, we check it
-    // separately infrequently (every 21 iterations) to avoid doing the expensive 64-bit integer check every time.
-    for (int i = 20; i >= 0; i--) {
-      currentMicros = esp_timer_get_time();
-      errDisplay->checkRedraw(currentMicros);
-    }
-    if (lastSerialPrintMicros + 7000000LL < currentMicros) { // only print every 7 seconds to avoid flooding Serial console
-      lastSerialPrintMicros = currentMicros;
-      Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
-      Serial.println(errorMessage);
-      Serial.println(F("Halted execution."));
-    }
-  }
-}
 
 // Scan for devices on the OneWire bus.
 // • prints addresses of detected devices to Serial console
@@ -406,7 +376,7 @@ void printDeviceAddress(const DeviceAddress address) {
   }
 }
 
-/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Initialize DS18B20 Temp Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
 /* initTemperatureSensor scans the the OneWire and attempts to connect to the DS18B20 temperature sensor,
  * which is expected to be the only device on the bus. We verify the device is a compatible temperature
@@ -454,9 +424,9 @@ float initTemperatureSensor() {
   }
 
   // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely
-  // a symptom of improper wiring or a defect. 
+  // a symptom of improper wiring or a defect.
   // IMPORTANT: readPowerSupply() returns TRUE if device is in PARASITE power mode (drawing power from data line),
-  // and FALSE if device is powered through the dedicated voltage line. We expect external power, so we check for TRUE to 
+  // and FALSE if device is powered through the dedicated voltage line. We expect external power, so we check for TRUE to
   // detect errors. Reference: DallasTemperature library documentation and DS18B20 datasheet READ POWER SUPPLY command (0xB4).
   if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) {
     ErrorMessages::ParasitePowerError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
@@ -584,14 +554,109 @@ float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   return tempC;
 }
 
-/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Notes ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+// IEEE 754 compliance verification: The temperature validation logic in `readTemp()` uses INFINITY and -INFINITY
+// as sentinel values to signal out-of-range measurements. This requires IEEE 754 floating-point support, which
+// guarantees proper representation and handling of infinity values. Most modern platforms (including ESP32) are
+// IEEE 754 compliant. This compile-time assertion ensures the platform meets this requirement.
+static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 (IEC 559) floating-point support required for infinity handling in temperature validation");
+static_assert(std::numeric_limits<float>::has_infinity, "Platform must support floating-point infinity for temperature error detection");
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Error Handling ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+// Display error message on both Serial console and OLED, then halt execution.
+// It is recommended to start the error message with a leading blank. This helps when scrolling text,
+// providing a space between the line leaving the display and the repeated message scrolling into the display.
+void displayErrorAndHalt(const String &errorMessage) {
+  // Print to Serial console
+  int64_t lastSerialPrintMicros = esp_timer_get_time();
+  Serial.println();
+  Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
+  Serial.println(errorMessage);
+  Serial.println(F("Halting execution."));
+
+  // Create and activate error display
+  DisplayText headline = DisplayText(u8g2, String(F(" ERROR")), 20);
+  DisplayText detailedMsg = DisplayText(u8g2, errorMessage, 16);
+  errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 20);
+
+  // Infinite loop: keep updating the error display
+  int64_t currentMicros;
+  while (true) {
+    // The error display needs to be called very frequently for smooth scrolling. In contrast, the console print of the error message is
+    // much less frequent and not particularly time sensitive. Since the check involves expensive 64-bit integer arithmetic, we check it
+    // separately infrequently (every 21 iterations) to avoid doing the expensive 64-bit integer check every time.
+    for (int i = 20; i >= 0; i--) {
+      currentMicros = esp_timer_get_time();
+      errDisplay->checkRedraw(currentMicros);
+    }
+    if (lastSerialPrintMicros + 7000000LL < currentMicros) { // only print every 7 seconds to avoid flooding Serial console
+      lastSerialPrintMicros = currentMicros;
+      Serial.print(F("ERROR:")); // leading blank of `errorMessage` is provided by the caller
+      Serial.println(errorMessage);
+      Serial.println(F("Halted execution."));
+    }
+  }
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ System Monitoring ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+// Heap monitoring detecting memory leaks and fragmentation over long operation periods. This function is
+// expensive, so it should only be called periodically at longer intervals.
+//
+// Fragmentation occurs when free memory is split into many small, disconnected chunks rather than contiguous
+// blocks. We detected memory fragmentation by comparing the total free heap against the largest contiguous block:
+// • Low fragmentation: largest block ≲ total free (memory is contiguous)
+// • High fragmentation: largest block ≪ total free (memory is scattered)
+//
+// Performance note: `heap_caps_get_largest_free_block()` walks the heap structure [cost: O(n) in number n of
+// free blocks], but this is acceptable for periodic monitoring at longer intervals. Specifically because we
+// expect a largely empty heap most of the time.
+void runHeapMonitor(int64_t currentMicros) {
+
+  // This code is intended to be run on ESP32-C3 without PSRAM.
+  // The function `heap_caps_get_largest_free_block` (library `esp_heap_caps`) returns the size of the largest
+  // contiguous free memory block in the specified memory region, as identified by the provided capability flags:
+  // ┌─────────────────────┬──────────────────────────────────┬──────────────────────────────────────────────────┐
+  // │ Flag                │ Meaning                          │ Relevant for ESP32-C3 (no PSRAM)                 │
+  // ├─────────────────────┼──────────────────────────────────┼──────────────────────────────────────────────────┤
+  // │ MALLOC_CAP_8BIT     │ 8-bit accessible (DRAM)          │ references the DRAM heap                         │
+  // │ MALLOC_CAP_INTERNAL │ Internal memory (vs ext. PSRAM)  │ Broader than needed; includes IRAM + DRAM        │
+  // │ MALLOC_CAP_DEFAULT  │ Default allocation capabilities  │ Equivalent to 8BIT on ESP32-C3                   │
+  // │ MALLOC_CAP_SPIRAM   │ External PSRAM/SPI RAM           │ N/A - no PSRAM on this device                    │
+  // │ MALLOC_CAP_DMA      │ DMA-capable memory               │ Subset of DRAM; too restrictive for general use  │
+  // │ MALLOC_CAP_32BIT    │ 32-bit aligned memory            │ Too restrictive for general heap monitoring      │
+  // │ MALLOC_CAP_EXEC     │ Executable memory (IRAM)         │ Not relevant for heap monitoring (code not data) │
+  // └─────────────────────┴──────────────────────────────────┴──────────────────────────────────────────────────┘
+  uint32_t largestBlock = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t minFreeHeap = ESP.getMinFreeHeap();
+
+  Serial.println();
+  Serial.print((currentMicros - startMicros) / 1000LL);
+  Serial.print(F(" HEAP MONITOR:\n\t"));
+  Serial.print(freeHeap);
+  Serial.print(F(" bytes of currently free heap\n\t"));
+  Serial.print(minFreeHeap);
+  Serial.print(F(" bytes of minimum free heap recorded since startup\n\t"));
+  Serial.print(largestBlock);
+  Serial.println(F(" bytes largest continuous block inside heap memory\n\t"));
+
+  // Calculate fragmentation percentage: What fraction of free memory is NOT in the largest block? This is an empirical measure!
+  // We record values one after another, changes in between may occur due to concurrent allocations/frees by other tasks. We
+  // ignore scenarios where values have edge cases.
+  if ((freeHeap > 0) && (largestBlock <= freeHeap)) {
+    float fragmentationPercent = (1.0f - static_cast<float>(largestBlock) / static_cast<float>(freeHeap)) * 100.0f;
+    Serial.print(fragmentationPercent, 1); // 1 decimal place
+    Serial.println(F("% heap fragmentation"));
+  }
+  Serial.println();
+}
+
+/* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ Notes and Future Work ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅
+
+
+ * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Notes ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
 
 • example for displaying temperature on web server hosted by the MCU: https://randomnerdtutorials.com/esp32-ds18b20-temperature-arduino-ide/
 
-
-
 */
-
-// TODO
-// CAUTION: C++ does not require that an implementation supports infinity. However, the std::numeric_limits<T>::is_iec559 check can confirm IEEE 754 compliance, which is standard on most modern platforms.
-// std::numeric_limits<T>::is_iec559
