@@ -17,7 +17,6 @@
 
 // Custom utils
 #include "ConsoleUtils.h"
-#include "DebugUtils.h"
 #include "Display.h"
 #include "ErrDisplay.h"
 #include "ErrorMessages.h"
@@ -26,8 +25,11 @@
 #include "LedUtils.h"
 #include "StatDisplay.h"
 
-// Preprocessor Macros
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DEBUG Printing and logging ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+// IMPORTANT: DEBUG must be defined BEFORE including `DebugUtils.h`, otherwise the preprocessor will
+// strip out the debug code when it processes the #if defined(DEBUG) directive inside debug_do().
 #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+#include "DebugUtils.h"
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
@@ -87,9 +89,6 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 
 /* Heating control
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-// static constexpr float TEMP_LIMIT_HEATING_ON = 5.0f;  // Temperature [°C] below which heating is turned ON
-// static constexpr float TEMP_LIMIT_HEATING_OFF = 8.0f; // Temperature [°C] above which heating is turned OFF
-
 static constexpr float TEMP_LIMIT_HEATING_ON = 3.0f;  // Temperature [°C] below which heating is turned ON
 static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
 
@@ -154,8 +153,8 @@ std::unique_ptr<ErrDisplay> errDisplay = nullptr;
 //   • All timing triggers and display objects are global/static with unbounded lifetime
 //
 // We use a prime number as the monitoring interval to avoid accidental synchronization with other periodic tasks.
-// static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 602143u; // trigger every 10mins and 2.143s
-static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 60133u; // trigger every 1min and 133ms (prime number)
+// static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 60133u; // trigger every 1min and 133ms (prime number)
+static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 602143u; // trigger every 10mins and 2.143s
 static FrequencyTrigger heapMonitor(FrequencyUtils::unbounded_lifetime, HEAP_MONITOR_INTERVAL_MS);
 
 // startMicros: Global timestamp [microseconds] marking the start of the main loop.
@@ -168,14 +167,15 @@ int testStateCounter = 0;
 
 /* FUNCTION PROTOTYPES
  * ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ */
+void printDeviceAddress(const DeviceAddress address);
 uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressOut);
 float initTemperatureSensor();
 void printTemperature(float tempC, bool printFahrenheit /* = false */);
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
-void printDeviceAddress(const DeviceAddress address);
-void displayErrorAndHalt(const String &errorMessage);
+void initWatchdogTimer();
 void runHeapMonitor(int64_t currentMicros);
+void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = true */);
 
 /* FRAMEWORK FUNCTION setup(): called by Arduino framework once at startup
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -218,6 +218,14 @@ void setup() {
   // Range: 0 (no contrast) to 255 (maximum contrast or brightness).
   u8g2.setContrast(3); // set contrast to very low (3 out of 255) to preserve display lifespan and reduce power consumption
 
+  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout.
+  // This ensures the system will reset if the main loop hangs for any reason.
+  //
+  // ATTENTION: initWatchdogTimer() calls `enableLoopWDT`, so there's no need to call `esp_task_wdt_reset` from `loop`.
+  // This is already done by the Arduino (see function `initWatchdogTimer()` for details).
+  initWatchdogTimer();
+
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
   // Note: initTemperatureSensor() halts on error, so if we reach the following line, `currentTempC` is valid
@@ -228,24 +236,6 @@ void setup() {
   statDisplay.setHeatingStatus(false);
   statDisplay.setWifiStatus(false);
   statDisplay.setTemp(currentTempC);
-
-  /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout.
-  // This ensures the system will reset if the main loop hangs for any reason.
-  // Notes (based on https://forum.arduino.cc/t/watchdog-reset-esp32-if-stuck-more-than-120-seconds/1266565/2 ):
-  // • There's no need to call `esp_task_wdt_reset` from `loop`, as long as we call `enableLoopWDT` from `setup`. This is because
-  //   the wrapper in `main.cpp` that calls `setup` and `loop` also calls `esp_task_wdt_reset` automatically on every `loop` iteration.
-  //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
-  // • Calling `enableLoopWDT` will automatically add the current task (which subsequently will continue on to executing the
-  //   `loop` function) to the watchdog. So we don't need to call `esp_task_wdt_add(NULL)` here.
-  // • Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct, but does not
-  //   store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated struct here.
-  esp_task_wdt_config_t wdtConfig = {
-      .timeout_ms = 10000,
-      .trigger_panic = true,
-  };
-  esp_task_wdt_init(&wdtConfig); // safe to pass pointer to stack allocated struct
-  enableLoopWDT();               // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ start ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   // Start timing of various tasks. We choose a prime numbers for startup delays with sufficient
@@ -265,7 +255,8 @@ void setup() {
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ CONTROLLER LOOP ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-// Task Watchdog Timer (TWDT) automatically reset when entering the `loop` function by the framework.
+// Task Watchdog Timer (TWDT) automatically reset when entering the `loop` function by the framework. This happens,
+// because `initWatchdogTimer` from `setup` calls `enableLoopWDT`. See function `initWatchdogTimer()` for details.
 void loop() {
   int64_t currentMicros = esp_timer_get_time();
 
@@ -297,17 +288,21 @@ void loop() {
     if (smoothedTemp < TEMP_LIMIT_HEATING_ON) { // Temperature too low: turn heating ON
       digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_ON);
       statDisplay.setHeatingStatus(true);
+      debug_do([&]() {
+        Serial.print((currentMicros - startMicros) / 1000LL);
+        Serial.println(F(" Turning Heating ON"));
+      });
     } else if (smoothedTemp > TEMP_LIMIT_HEATING_OFF) { // Temperature high enough: turn heating OFF
       digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF);
       statDisplay.setHeatingStatus(false);
+      debug_do([&]() {
+        Serial.print((currentMicros - startMicros) / 1000LL);
+        Serial.println(F(" Turning Heating Off"));
+      });
     }
 
     tempMeasurementSuccess.activate();
   }
-
-  // Serial.print(F("  Current temperature: "));
-  // Serial.print(tempC);
-  // Serial.print(F(" C / "));
 
   statDisplay.checkRedraw(currentMicros);
   tempMeasurementSuccess.checkToggleLED(currentMicros);
@@ -335,9 +330,6 @@ void loop() {
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ BUSINESS LOGIC FUNCTIONS ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 
-/* ...
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ DS18B20 Temperature Sensor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // Scan for devices on the OneWire bus.
@@ -359,6 +351,11 @@ uint8_t scanDevicesAddressesAndRememberLast(OneWire &bus, DeviceAddress addressO
   } else {
     Serial.println(F("No devices found on OneWire bus!"));
   }
+
+  // Reset search state for code clarity and future-proofing.
+  // While not strictly required (DallasTemperature manages the bus from here),
+  // this leaves the bus in a well-defined initial state.
+  bus.reset_search();
 
   return count;
 }
@@ -396,7 +393,7 @@ float initTemperatureSensor() {
   uint8_t deviceCount = scanDevicesAddressesAndRememberLast(temperatureSensorBus, tempSensorDeviceAddress);
   if (deviceCount != 1) {
     ErrorMessages::DeviceCountError::build(ErrorMessages::errorBuffer, TEMPERATURE_SENSOR_GPIO, deviceCount);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
 
   // STEP 2: Pre-Init Sanity Checks that the device is supported by the DallasTemperature driver:
@@ -406,11 +403,11 @@ float initTemperatureSensor() {
 
   if (!(temperatureSensors.validAddress(tempSensorDeviceAddress))) { // confirm that the address is valid
     ErrorMessages::IncompatibleAddressError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
   if (!(temperatureSensors.validFamily(tempSensorDeviceAddress))) { // confirm the device is supported by the driver
     ErrorMessages::UnknownDeviceError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
 
   // STEP 3: Init Temperature Sensor
@@ -420,7 +417,7 @@ float initTemperatureSensor() {
   // STEP 4: Post-Init Sanity Checks that the DS18B20 temperature sensor is properly connected
   if (!(temperatureSensors.isConnected(tempSensorDeviceAddress))) { // sanity check: the device at the expected address is reported as connected
     ErrorMessages::SensorDisconnectedError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
 
   // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely
@@ -430,7 +427,7 @@ float initTemperatureSensor() {
   // detect errors. Reference: DallasTemperature library documentation and DS18B20 datasheet READ POWER SUPPLY command (0xB4).
   if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) {
     ErrorMessages::ParasitePowerError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
 
   // set the temperature accuracy
@@ -445,7 +442,7 @@ float initTemperatureSensor() {
   uint8_t actualPrecision = temperatureSensors.getResolution(tempSensorDeviceAddress);
   if (actualPrecision != TEMPERATURE_PRECISION) {
     ErrorMessages::PrecisionSettingError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress, TEMPERATURE_PRECISION, actualPrecision);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
   Serial.print(F("Successfully set temperature sensor to precision of "));
   Serial.print(actualPrecision, DEC);
@@ -467,21 +464,24 @@ float initTemperatureSensor() {
   int64_t initMeasurementStart = esp_timer_get_time();
   int64_t currentTime = initMeasurementStart;
   int64_t lastMeasurementRequested;
-  float tempC; // last values read
+  float tempC = NAN; // last values read, initialized to invalid value for safety
   do {
+    // For the top portion of the loop, `currentTime` should always be a fresh value: we entered the loop with a fresh value.
+    // The only way to restart the do-loop is via the break statement in the loop below, at which point we have just taken the time.
     temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
     lastMeasurementRequested = currentTime;
     int64_t timeout = lastMeasurementRequested + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)) * 1000LL;
     retrieveTemp.activate(TEMP_READ_DELAY_MS); // Wait for temperature read to complete (at 10-bit this should be ~187.5ms)
+
     while (true) {
-      int64_t currentTime = esp_timer_get_time();
+      currentTime = esp_timer_get_time();
       if (retrieveTemp.checkTrigger(currentTime)) {                    // updated temperature ready for retrieval
         tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // in case of error: blocks and displays error display indefinitely
         break;
       }
       if (timeout < currentTime) { // waiting for temperature read takes too long for stable operations!
         ErrorMessages::TemperatureDelayError::build(ErrorMessages::errorBuffer, TEMP_READ_DELAY_MS);
-        displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+        displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
       }
       delay(3);
     }
@@ -511,7 +511,8 @@ float initTemperatureSensor() {
   //   printTemperature(tempC, true);
   //   Serial.println();
 
-  //   delay(5000);
+  //   delay(2000);
+  //   esp_task_wdt_reset(); // reset watchdog timer to avoid reset during this test loop
   // }
 
   Serial.println(F("DS18B20 temperature sensor successfully initialized\n"));
@@ -560,7 +561,7 @@ float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   if (tempC > TEMP_SENSOR_LARGEST_VALID) tempC = INFINITY;
   if (!std::isfinite(tempC)) {
     ErrorMessages::TemperatureReadError::build(ErrorMessages::errorBuffer, tempC);
-    displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true); // will block indefinitely
   }
 
   return tempC;
@@ -578,7 +579,7 @@ static_assert(std::numeric_limits<float>::has_infinity, "Platform must support f
 // Display error message on both Serial console and OLED, then halt execution.
 // It is recommended to start the error message with a leading blank. This helps when scrolling text,
 // providing a space between the line leaving the display and the repeated message scrolling into the display.
-void displayErrorAndHalt(const String &errorMessage) {
+void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = true */) {
   // Print to Serial console
   int64_t lastSerialPrintMicros = esp_timer_get_time();
   Serial.println();
@@ -600,6 +601,7 @@ void displayErrorAndHalt(const String &errorMessage) {
     for (int i = 20; i >= 0; i--) {
       currentMicros = esp_timer_get_time();
       errDisplay->checkRedraw(currentMicros);
+      if (resetWatchdog) esp_task_wdt_reset(); // reset watchdog timer to avoid frequent resets and instead maintain the error for human intervention
     }
     if (lastSerialPrintMicros + 7000000LL < currentMicros) { // only print every 7 seconds to avoid flooding Serial console
       lastSerialPrintMicros = currentMicros;
@@ -611,6 +613,49 @@ void displayErrorAndHalt(const String &errorMessage) {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ System Monitoring ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+//
+// initWatchdogTimer initializes the ESP32 Task Watchdog Timer (TWDT) with a 10-second timeout
+// for system stability. If the main loop hangs for any reason, the system will panic and reset.
+//
+// NOTES (based on https://forum.arduino.cc/t/watchdog-reset-esp32-if-stuck-more-than-120-seconds/1266565/2 ):
+// • There's no need to call `esp_task_wdt_reset` from `loop`, as long as we call `enableLoopWDT` from `setup`.
+//   This is because the Arduino framework wrapper that calls `setup` and `loop` also calls `esp_task_wdt_reset`
+//   automatically on every `loop` iteration.
+//   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
+// • Calling `enableLoopWDT` will automatically add the current task (which subsequently will continue on to
+//   executing the `loop` function) to the watchdog. So we don't need to call `esp_task_wdt_add(NULL)` here.
+void initWatchdogTimer() {
+  // Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct,
+  // but does not store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated
+  // struct here.
+  esp_task_wdt_config_t wdtConfig = {
+      .timeout_ms = 10000,
+      .trigger_panic = true,
+  };
+  esp_err_t wdtInitResult = esp_task_wdt_init(&wdtConfig);
+
+  // RETURN VALUE HANDLING: `esp_task_wdt_init` returns `esp_err_t` with possible values:
+  //  • ESP_OK: Initialization successful
+  //  • ESP_ERR_INVALID_STATE: Watchdog already initialized (can be safely ignored)
+  // We check the return value to handle the already-initialized case gracefully and to detect critical initialization failures.
+  if (wdtInitResult == ESP_OK) {
+    Serial.println(F("Watchdog timer initialized successfully."));
+  } else if (wdtInitResult == ESP_ERR_INVALID_STATE) {
+    Serial.println(F("Watchdog timer already being initialized is of no concern.\n"));
+  } else {
+    // Critical error: likely ESP_ERR_NO_MEM or other unexpected failure. Halt execution since watchdog is essential for long-term system stability.
+    // ATTENTION: in this scenario, we haven't subscribed the main task to the watchdog yet, and the watchdog is reporting problems, so we cannot
+    // rely ("pet") reset the watchdog while halting, because this will likely just lead to a flood of console prints informing about the watchdog
+    // rejecting the resets.
+    ErrorMessages::WatchdogInitError::build(ErrorMessages::errorBuffer, static_cast<int>(wdtInitResult));
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), false); // will block indefinitely
+  }
+  enableLoopWDT(); // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
+}
+
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Heap Monitor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
 // Heap monitoring detecting memory leaks and fragmentation over long operation periods. This function is
 // expensive, so it should only be called periodically at longer intervals.
@@ -651,7 +696,7 @@ void runHeapMonitor(int64_t currentMicros) {
   Serial.print(minFreeHeap);
   Serial.print(F(" bytes of minimum free heap recorded since startup\n\t"));
   Serial.print(largestBlock);
-  Serial.println(F(" bytes largest continuous block inside heap memory\n\t"));
+  Serial.print(F(" bytes largest continuous block inside heap memory\n\t"));
 
   // Calculate fragmentation percentage: What fraction of free memory is NOT in the largest block? This is an empirical measure!
   // We record values one after another, changes in between may occur due to concurrent allocations/frees by other tasks. We

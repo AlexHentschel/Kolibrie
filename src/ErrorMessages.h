@@ -592,6 +592,23 @@ namespace ErrorMessages {
     }
   };
 
+  /* ─────────────────────────── Error: Watchdog Initialization Failed ─────────────────────────── */
+  struct WatchdogInitError {
+    static constexpr const char *prefix = " Failed to initialize watchdog timer. Error code: "; // Stored in flash
+
+    static constexpr size_t worstCaseLength() {
+      return const_strlen(prefix) + INT_STRING_BUFFER_SIZE + 1; // term "+1" is tailing exclamation mark
+    }
+
+    static void build(char *buffer, int errorCode) {
+      size_t pos = 0;
+      writeString(buffer, pos, prefix);
+      writeInt(buffer, pos, errorCode);
+      writeChar(buffer, pos, '!');
+      buffer[pos] = '\0';
+    }
+  };
+
   /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ COMPILE-TIME VALIDATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
   static_assert(DeviceCountError::worstCaseLength() < BUFFER_SIZE,
@@ -617,5 +634,8 @@ namespace ErrorMessages {
 
   static_assert(TemperatureDelayError::worstCaseLength() < BUFFER_SIZE,
                 "TemperatureDelayError exceeds buffer size!");
+
+  static_assert(WatchdogInitError::worstCaseLength() < BUFFER_SIZE,
+                "WatchdogInitError exceeds buffer size!");
 
 } // namespace ErrorMessages
