@@ -18,9 +18,14 @@
 // thread-safe. If you need to use this in a multi-threaded environment (e.g., FreeRTOS), you must add
 // appropriate synchronization (mutex/semaphore) before calling any build() functions.
 //
+// HEAP FRAGMENTATION: This framework is specifically designed to avoid heap fragmentation by using a
+// static buffer. However, note that converting the buffer to Arduino String (e.g., String(getBuffer()))
+// will allocate on the heap. For long-running systems, prefer using getBuffer() directly with functions
+// that accept const char* to avoid any heap allocations.
+//
 // TRUNCATION HANDLING: If a message would exceed the buffer size, it will be truncated and the special
-// character '»' (ASCII 187) will be appended as the last character before the null terminator to indicate
-// truncation occurred.
+// character '»' (Hex 0xBB, ASCII 187) will be appended as the last character before the null terminator
+// to indicate truncation occurred.
 //
 // ═══════════════════════════════════ USAGE EXAMPLES ═══════════════════════════════════════════════
 //
@@ -61,12 +66,19 @@
 
 namespace ErrorMessages {
   constexpr size_t BUFFER_SIZE = 150;
-  constexpr char TRUNCATION_MARKER = static_cast<char>(187); // '»' character to indicate truncation in U8G2 default fonts, such as `u8g2_font_7x13_tf`
+  // TRUNCATION_MARKER: Use explicit hex notation `BB` (= `187` decimal) for extended ASCII character '»' (0xBB in CP437/ISO-8859-1).
+  // On platforms where char is signed (most common), using the decimal `187` will wrap to a negative value (-69), producing the wrong
+  // character. While U8G2 will interpret the input byte correctly as 0xBB, this is technically undefined behavior.
+  // Using explicit hex notation `BB` avoids implementation-defined behavior when char is signed. The byte value 0xBB displays correctly
+  // in U8G2 default fonts such as `u8g2_font_7x13_tf`.
+  constexpr char TRUNCATION_MARKER = '\xBB';
 
   // External declaration of the error buffer (defined in ErrorMessages.cpp)
   extern char errorBuffer[BUFFER_SIZE];
 
   // Get pointer to the error buffer
+  // Returns a pointer to the static buffer containing the most recently built error message.
+  // The buffer is guaranteed to be null-terminated and safe to use with standard C string functions.
   const char *getBuffer();
 
   /* ━━━━━━━━━━━━━━━━━━━━ COMPILE-TIME LENGTH CALCULATION HELPERS ━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -347,9 +359,12 @@ namespace ErrorMessages {
 
     // Calculate decimal part first to handle rounding carry-over. Rounding might increase the integer part by 1,
     // so we must check before writing. Hypothetically, if we reversed the order by writing the integer part first,
-    // and then rounded the fractional part, would introduce a bug where 1.996 would become "1.100" instead of "2.00".
+    // and then rounded the fractional part, it would introduce a bug where 1.996 would become "1.100" instead of "2.00".
     // This is because rounding might increase the integer part by 1, which would be incorrectly written to the buffer
     // if we wrote the integer part first.
+    //
+    // PRECISION NOTE: For values very close to INT_MAX (e.g., 2147483646.996), the fractional calculation may have
+    // limited precision due to float's 24-bit mantissa, but the carry-over check below ensures we never exceed INT_MAX.
     float fractional = value - static_cast<int>(value);
     int decimal = static_cast<int>(fractional * 100.0f + 0.5f); // two decimal places; rounded to nearest integer, and multiplied by 100
     int intPart = static_cast<int>(value);

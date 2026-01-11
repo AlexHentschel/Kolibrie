@@ -140,12 +140,26 @@ std::unique_ptr<ErrDisplay> errDisplay = nullptr;
 /* Misc
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // Heap monitoring for debugging and long-term stability tracking
-// Prints free heap memory approximately every 10 minutes to detect potential memory leaks or fragmentation.
-// We use an a primer number as time interval to avoid synchronization with other periodic tasks.
-// static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 602143u; // terigger every 10mins and 2.143s
-static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 60133u; // terigger every 1mins and 133ms
+// Prints free heap memory periodically to detect potential memory leaks or fragmentation over extended runtime.
+//
+// HEAP ALLOCATION POLICY:
+//   • Main loop: ZERO heap allocations - all objects are pre-allocated or stack-allocated
+//   • Setup phase: Limited one-time allocations (consolePrintLifeSign, display objects) that persist
+//   • Error paths: Heap allocations allowed (Arduino Strings, DisplayText) since errors halt execution
+//
+// FRAGMENTATION PREVENTION:
+//   • No repeated allocation/deallocation cycles in the main loop
+//   • Error message framework uses static buffer (ErrorMessages::errorBuffer)
+//   • All timing triggers and display objects are global/static with unbounded lifetime
+//
+// We use a prime number as the monitoring interval to avoid accidental synchronization with other periodic tasks.
+// static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 602143u; // trigger every 10mins and 2.143s
+static constexpr unsigned int HEAP_MONITOR_INTERVAL_MS = 60133u; // trigger every 1min and 133ms (prime number)
 static FrequencyTrigger heapMonitor(FrequencyUtils::unbounded_lifetime, HEAP_MONITOR_INTERVAL_MS);
 
+// startMicros: Global timestamp [microseconds] marking the start of the main loop.
+// Used for relative timing calculations in debug output. Using int64_t provides ~292,471 years before overflow,
+// ensuring safe operation for embedded systems that may run continuously for weeks or months.
 int64_t startMicros = 0;
 int testStateCounter = 0;
 
@@ -205,7 +219,8 @@ void setup() {
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
-  tempEwma.reset(currentTempC);                 // initialize EWMA to start at the initial temperature reading
+  // Note: initTemperatureSensor() halts on error, so if we reach the following line, `currentTempC` is valid
+  tempEwma.reset(currentTempC);                 // initialize EWMA filter to start at the initial temperature reading
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Happy Path Status Display ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 
@@ -438,11 +453,12 @@ float initTemperatureSensor() {
     displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
 
-  // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely a symptom of some defect.
-  if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) { // Read device's power requirements. Return 1 if device needs parasite power.
-    // Serial.print(F("WARNING: DS18B20 temperature sensor "));
-    // printDeviceAddress(tempSensorDeviceAddress);
-    // Serial.println(F(" is reporting PARASITE POWER MODE. This is unexpected and may indicate a defect."));
+  // Check that sensor is not reporting parasite power mode. Parasite power mode is not expected and likely
+  // a symptom of improper wiring or a defect. 
+  // IMPORTANT: readPowerSupply() returns TRUE if device is in PARASITE power mode (drawing power from data line),
+  // and FALSE if device is powered through the dedicated voltage line. We expect external power, so we check for TRUE to 
+  // detect errors. Reference: DallasTemperature library documentation and DS18B20 datasheet READ POWER SUPPLY command (0xB4).
+  if (temperatureSensors.readPowerSupply(tempSensorDeviceAddress)) {
     ErrorMessages::ParasitePowerError::build(ErrorMessages::errorBuffer, tempSensorDeviceAddress);
     displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
   }
@@ -541,18 +557,18 @@ void printTemperature(float tempC, bool printFahrenheit /* = false */) {
 }
 
 // readTemp retrieves the temperature and returns the temperature in Celsius as float.
-// We apply basic sanity checks on the read temperature value:
-//  • the read value is not DEVICE_DISCONNECTED_C (indicating sensor disconnected)
-//    as defined by the DallasTemperature library
-//  • the read value is in the closed interval [ TEMP_SENSOR_LOEWEST_VALID , TEMP_SENSOR_LARGEST_VALID ]
+// We apply the following sanity checks on the retrieved temperature value:
+//  • the value is not DEVICE_DISCONNECTED_C (defined by the DallasTemperature library)
+//  • the value is in the closed interval [ TEMP_SENSOR_LOEWEST_VALID , TEMP_SENSOR_LARGEST_VALID ]
 //
-// ATTENTIONK: when a retrieved temp value is outside the valid range, we print an ERROR message to
-// Serial console and OLED display, and this function BLOCKs INDEFINITELY.
+// CRITICAL: when a retrieved temperature value is outside the valid range, this function prints an ERROR
+// message to the Serial console and OLED display, then BLOCKS INDEFINITELY (calls `displayErrorAndHalt`).
+// This is intentional: temperature sensor failure is considered a critical system error requiring manual intervention.
 //
 // REQUIREMENT:
 // This function expects that `waitForConversion` is set to false, i.e. temperature measurements are non-blocking.
 // Specifically, they must be requested via `requestTemperaturesByAddress` and need sufficient time to complete
-// before calling this function.
+// before calling this function (see `TEMP_READ_DELAY_MS` for the configured wait time).
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress) {
   float tempC = sensors.getTempC(deviceAddress);
 
