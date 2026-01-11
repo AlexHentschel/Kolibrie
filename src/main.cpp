@@ -460,25 +460,37 @@ float initTemperatureSensor() {
   //   Given the delay `REQUEST_TEMP_INTERVAL_MS` (unsigned int value), 75% of this can be efficiently computed as
   //   `REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)` using bit shift for division by 4.
   // • Read temperature and log the current value to Serial console.
-  temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
-  int64_t tstart = esp_timer_get_time();
-  int64_t timeout = tstart + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)) * 1000LL;
-  retrieveTemp.activate(TEMP_READ_DELAY_MS); // Wait for temperature read to complete (at 10-bit this should be ~187.5ms)
-  while (true) {
-    int64_t t = esp_timer_get_time();
-    if (retrieveTemp.checkTrigger(t)) break; // updated temperature ready for retrieval
-    if (timeout < t) {                       // waiting for temperature read takes too long for stable operations!
-      ErrorMessages::TemperatureDelayError::build(ErrorMessages::errorBuffer, TEMP_READ_DELAY_MS);
-      displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+  // • The initial temperature reading from a DS18B20 sensor seems to be slower than subsequent reads because the first
+  //   reading after power-up supposedly defaults to an internal power - on reset value of + 25°C for the current sensor.
+  //   The initial communication sequence or the first actual temperature conversion cycle requires the full conversion time
+  //    (up to 750ms at 12-bit resolution). So we just continue to read temperatures until 1 second has elapsed and continue.
+  int64_t initMeasurementStart = esp_timer_get_time();
+  int64_t currentTime = initMeasurementStart;
+  int64_t lastMeasurementRequested;
+  float tempC; // last values read
+  do {
+    temperatureSensors.requestTemperaturesByAddress(tempSensorDeviceAddress); // Request temperature conversion and wait for it to complete
+    lastMeasurementRequested = currentTime;
+    int64_t timeout = lastMeasurementRequested + static_cast<int64_t>(REQUEST_TEMP_INTERVAL_MS - (REQUEST_TEMP_INTERVAL_MS >> 2)) * 1000LL;
+    retrieveTemp.activate(TEMP_READ_DELAY_MS); // Wait for temperature read to complete (at 10-bit this should be ~187.5ms)
+    while (true) {
+      int64_t currentTime = esp_timer_get_time();
+      if (retrieveTemp.checkTrigger(currentTime)) {                    // updated temperature ready for retrieval
+        tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // in case of error: blocks and displays error display indefinitely
+        break;
+      }
+      if (timeout < currentTime) { // waiting for temperature read takes too long for stable operations!
+        ErrorMessages::TemperatureDelayError::build(ErrorMessages::errorBuffer, TEMP_READ_DELAY_MS);
+        displayErrorAndHalt(String(ErrorMessages::getBuffer())); // will block indefinitely
+      }
+      delay(3);
     }
-    delay(3);
-  }
-  int64_t delta = esp_timer_get_time() - tstart; // delay in MICROseconds
+  } while (currentTime < initMeasurementStart + 1000000LL); // read temperatures for at least one second, to flush out wakeup-value
+  int64_t delta = esp_timer_get_time() - initMeasurementStart; // delay in MICROseconds
   Serial.print(F("Operating with latency of "));
   Serial.print(delta / 1000LL); // convert delay to milliseconds
   Serial.println(F("ms between requesting and retrieving temperature measurement."));
 
-  float tempC = readTemp(temperatureSensors, tempSensorDeviceAddress); // in case of error: blocks and displays error display indefinitely
   Serial.print(F("Current temperature: "));
   Serial.print(tempC);
   Serial.print(F(" C / "));
