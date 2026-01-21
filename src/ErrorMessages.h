@@ -440,8 +440,8 @@ namespace ErrorMessages {
 
   /* ────────────────────────────── Error: Device count mismatch ──────────────────────────────── */
   struct DeviceCountError {
-    static constexpr const char *prefix = " Expected 1 device on GPIO "; // Stored in flash
-    static constexpr const char *middle = ", found ";                    // Stored in flash
+    static constexpr const char *prefix = " Expecting 1 device on GPIO "; // Stored in flash
+    static constexpr const char *middle = ", found ";                     // Stored in flash
 
     static constexpr size_t worstCaseLength(uint8_t maxGpio = 255, uint8_t maxDevices = 255) {
       return const_strlen(prefix) + intLength(static_cast<int>(maxGpio)) +

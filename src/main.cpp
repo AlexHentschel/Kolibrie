@@ -28,8 +28,10 @@
 /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DEBUG Printing and logging ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 // IMPORTANT: DEBUG must be defined BEFORE including `DebugUtils.h`, otherwise the preprocessor will
 // strip out the debug code when it processes the #if defined(DEBUG) directive inside debug_do().
-#define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
 #include "DebugUtils.h"
+
+// DEBUG LOGS
+// #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
@@ -89,7 +91,7 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 
 /* Heating control
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-static constexpr float TEMP_LIMIT_HEATING_ON = 3.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_ON = 4.0f;  // Temperature [°C] below which heating is turned ON
 static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
 
 // EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
@@ -631,7 +633,7 @@ void initWatchdogTimer() {
   // but does not store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated
   // struct here.
   esp_task_wdt_config_t wdtConfig = {
-      .timeout_ms = 10000,
+      .timeout_ms = 300000, // 5 minutes, i.e. 300,000 milliseconds 
       .trigger_panic = true,
   };
   esp_err_t wdtInitResult = esp_task_wdt_init(&wdtConfig);
