@@ -33,10 +33,6 @@
 // DEBUG LOGS
 #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
 
-// TESTING: Disable main watchdog timer to observe system behavior without automatic resets
-// CAUTION: Only use this during controlled testing. In production, the watchdog is essential for system stability.
-// #define DISABLE_MAIN_WATCHDOG
-
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
 #include "WiFiCredentials.h"
@@ -95,11 +91,8 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 
 /* Heating control
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-// static constexpr float TEMP_LIMIT_HEATING_ON = 4.0f;  // Temperature [°C] below which heating is turned ON
-// static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
-
-static constexpr float TEMP_LIMIT_HEATING_ON = 23.0f;  // Temperature [°C] below which heating is turned ON
-static constexpr float TEMP_LIMIT_HEATING_OFF = 25.0f; // Temperature [°C] above which heating is turned OFF
+static constexpr float TEMP_LIMIT_HEATING_ON = 4.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
 
 // EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
 // after a step change of the input, it takes about 50 samples to move the ouput approx. 63% of the way from the old to the new value.
@@ -673,19 +666,7 @@ void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = tru
 //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
 // • Calling `enableLoopWDT` will automatically add the current task (which subsequently will continue on to
 //   executing the `loop` function) to the watchdog. So we don't need to call `esp_task_wdt_add(NULL)` here.
-// • TESTING MODE; CAUTION: Only use during controlled testing, because watchdog is essential for production stability
-//   - Define DISABLE_MAIN_WATCHDOG to disable the main watchdog timer for controlled testing
-//   - This allows observation of system behavior over extended periods without automatic resets
 void initWatchdogTimer() {
-#ifdef DISABLE_MAIN_WATCHDOG
-  Serial.println(F("╔════════════════════════════════════════════════════════════════════════════╗"));
-  Serial.println(F("║  WARNING: Main watchdog timer DISABLED for testing purposes               ║"));
-  Serial.println(F("║  System will NOT automatically reset on hangs or crashes                  ║"));
-  Serial.println(F("╚════════════════════════════════════════════════════════════════════════════╝"));
-  Serial.println();
-  return; // Skip watchdog initialization
-#endif
-
   // Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct,
   // but does not store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated
   // struct here.
