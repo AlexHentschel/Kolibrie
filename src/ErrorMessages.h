@@ -609,6 +609,25 @@ namespace ErrorMessages {
     }
   };
 
+  /* ────────────────────── Error: Heating Liveness Monitor Triggered ───────────────────────────── */
+  struct HeatingLivenessMonitorError {
+    static constexpr const char *prefix = " Heating control logic inactive for "; // Stored in flash
+    static constexpr const char *suffix = " seconds!";                            // Stored in flash
+
+    static constexpr size_t worstCaseLength() {
+      // Worst case: very large time value (using INT_STRING_BUFFER_SIZE for safety)
+      return const_strlen(prefix) + INT_STRING_BUFFER_SIZE + const_strlen(suffix);
+    }
+
+    static void build(char *buffer, int timeoutSeconds) {
+      size_t pos = 0;
+      writeString(buffer, pos, prefix);
+      writeInt(buffer, pos, timeoutSeconds);
+      writeString(buffer, pos, suffix);
+      buffer[pos] = '\0';
+    }
+  };
+
   /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ COMPILE-TIME VALIDATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
   static_assert(DeviceCountError::worstCaseLength() < BUFFER_SIZE,
@@ -637,5 +656,8 @@ namespace ErrorMessages {
 
   static_assert(WatchdogInitError::worstCaseLength() < BUFFER_SIZE,
                 "WatchdogInitError exceeds buffer size!");
+
+  static_assert(HeatingLivenessMonitorError::worstCaseLength() < BUFFER_SIZE,
+                "HeatingLivenessMonitorError exceeds buffer size!");
 
 } // namespace ErrorMessages

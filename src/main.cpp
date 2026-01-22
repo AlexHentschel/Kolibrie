@@ -31,7 +31,11 @@
 #include "DebugUtils.h"
 
 // DEBUG LOGS
-// #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+#define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+
+// TESTING: Disable main watchdog timer to observe system behavior without automatic resets
+// CAUTION: Only use this during controlled testing. In production, the watchdog is essential for system stability.
+// #define DISABLE_MAIN_WATCHDOG
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
@@ -91,8 +95,11 @@ static CooldownTriggerN retrieveTemp(1, 99999u);
 
 /* Heating control
  * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-static constexpr float TEMP_LIMIT_HEATING_ON = 4.0f;  // Temperature [°C] below which heating is turned ON
-static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
+// static constexpr float TEMP_LIMIT_HEATING_ON = 4.0f;  // Temperature [°C] below which heating is turned ON
+// static constexpr float TEMP_LIMIT_HEATING_OFF = 6.0f; // Temperature [°C] above which heating is turned OFF
+
+static constexpr float TEMP_LIMIT_HEATING_ON = 23.0f;  // Temperature [°C] below which heating is turned ON
+static constexpr float TEMP_LIMIT_HEATING_OFF = 25.0f; // Temperature [°C] above which heating is turned OFF
 
 // EWMA filter for temperature readings, smoothing factor α = 0.02. This corresponds roughly to a time window of 50 samples. Specifically:
 // after a step change of the input, it takes about 50 samples to move the ouput approx. 63% of the way from the old to the new value.
@@ -123,6 +130,28 @@ static constexpr uint8_t EXT_LOAD_SWITCH = 1; // GPIO 1 controls the external lo
 // Stack-allocated to avoid memory leak.
 // Toggling GPIO 1, which connects to Mosfet
 static LEDExpiringToggler extLoadToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HIGH_IS_ON); // toggles every 2 seconds
+
+/* Heating Liveness Monitor
+ * ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+// Secondary monitoring mechanism to ensure heating turns OFF in case we haven't visited the the core logic
+// comparing new temperature readings with the respective threshold values recently. If no new temperature
+// readings are available, we have bugs in temperature reading, or conditional logic errors, the heating might
+// remain on unintentionally.
+//
+// IMPORTANT: This Monitor does NOT protect against complete system hangs/crashes. If the system crashes, this
+// Heating Monitor won't execute either. Catching complete system hangs/crashess is the job of the main
+// watchdog (TWDT). However, this Monitor provides a SHORTER timeout (3s vs 30s) and specifically monitors the critical
+// heating section.
+//
+// LIVENESS TIMEOUT: If the heating control section doesn't execute within this interval,
+// the liveness monitor will force heating OFF and display an error.
+static constexpr int64_t HEATING_LIVENESS_TIMEOUT_MICROS = 3000000LL; // 3 seconds in microseconds
+
+// Timestamp of the last time the heating control logic executed successfully
+static volatile int64_t lastHeatingControlMicros = 0;
+
+// Flag indicating whether the liveness monitor has been activated
+static volatile bool heatingLivenessMonitorActive = false;
 
 /* IO and APIs
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -176,6 +205,9 @@ void printTemperature(float tempC, bool printFahrenheit /* = false */);
 float readTemp(DallasTemperature &sensors, DeviceAddress deviceAddress);
 
 void initWatchdogTimer();
+void initHeatingLivenessMonitor();
+void checkHeatingLivenessMonitor(int64_t currentMicros);
+void resetHeatingLivenessMonitor(int64_t currentMicros);
 void runHeapMonitor(int64_t currentMicros);
 void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = true */);
 
@@ -221,12 +253,18 @@ void setup() {
   u8g2.setContrast(3); // set contrast to very low (3 out of 255) to preserve display lifespan and reduce power consumption
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Watchdog Timer ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  // Initialize watchdog timer with 10 second timeout for system stability, panic on timeout.
+  // Initialize main watchdog timer (30 seconds) for system stability, panic on timeout.
   // This ensures the system will reset if the main loop hangs for any reason.
   //
   // ATTENTION: initWatchdogTimer() calls `enableLoopWDT`, so there's no need to call `esp_task_wdt_reset` from `loop`.
   // This is already done by the Arduino (see function `initWatchdogTimer()` for details).
   initWatchdogTimer();
+
+  // Initialize heating liveness monitor (3 seconds) - independent failure monitoring mechanism, which checks that
+  // the core heating control logic is executing regularly. If it doesn't, the monitor will force heating OFF and
+  // display an error. Note: the monitor halts the system in case it truggers. However, it does not protect against
+  // complete system hangs/crashes, which is the job of themain watchdog (TWDT), which will re-boot the system.
+  initHeatingLivenessMonitor();
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Temperature Control ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
   float currentTempC = initTemperatureSensor(); // initialize DS18B20 temperature sensor and read current temperature
@@ -261,6 +299,9 @@ void setup() {
 // because `initWatchdogTimer` from `setup` calls `enableLoopWDT`. See function `initWatchdogTimer()` for details.
 void loop() {
   int64_t currentMicros = esp_timer_get_time();
+
+  // Check heating liveness monitor - ensure heating control is executing regularly
+  checkHeatingLivenessMonitor(currentMicros);
 
   // Requesting temperature measurement:
   if (requestTempRead.checkTrigger(currentMicros)) {
@@ -303,7 +344,8 @@ void loop() {
       });
     }
 
-    tempMeasurementSuccess.activate();
+    resetHeatingLivenessMonitor(currentMicros); // Reset heating liveness monitor - heating control logic executed successfully
+    tempMeasurementSuccess.activate();          // blink LED to indicate successful temperature measurement
   }
 
   statDisplay.checkRedraw(currentMicros);
@@ -594,6 +636,9 @@ void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = tru
   DisplayText detailedMsg = DisplayText(u8g2, errorMessage, 16);
   errDisplay = std::make_unique<ErrDisplay>(u8g2, headline, detailedMsg, 20);
 
+  // IMPORTANT for safety: turn heating OFF before halting execution.
+  digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF);
+
   // Infinite loop: keep updating the error display
   int64_t currentMicros;
   while (true) {
@@ -603,7 +648,7 @@ void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = tru
     for (int i = 20; i >= 0; i--) {
       currentMicros = esp_timer_get_time();
       errDisplay->checkRedraw(currentMicros);
-      if (resetWatchdog) esp_task_wdt_reset(); // reset watchdog timer to avoid frequent resets and instead maintain the error for human intervention
+      if (resetWatchdog) esp_task_wdt_reset(); // reset watchdog timer to avoid frequent reboots and instead maintain the error for human intervention
     }
     if (lastSerialPrintMicros + 7000000LL < currentMicros) { // only print every 7 seconds to avoid flooding Serial console
       lastSerialPrintMicros = currentMicros;
@@ -628,12 +673,24 @@ void displayErrorAndHalt(const String &errorMessage, bool resetWatchdog /* = tru
 //   https://github.com/espressif/arduino-esp32/blob/2.0.17/tools/sdk/esp32/include/esp_system/include/esp_task_wdt.h#L45
 // • Calling `enableLoopWDT` will automatically add the current task (which subsequently will continue on to
 //   executing the `loop` function) to the watchdog. So we don't need to call `esp_task_wdt_add(NULL)` here.
+// • TESTING MODE; CAUTION: Only use during controlled testing, because watchdog is essential for production stability
+//   - Define DISABLE_MAIN_WATCHDOG to disable the main watchdog timer for controlled testing
+//   - This allows observation of system behavior over extended periods without automatic resets
 void initWatchdogTimer() {
+#ifdef DISABLE_MAIN_WATCHDOG
+  Serial.println(F("╔════════════════════════════════════════════════════════════════════════════╗"));
+  Serial.println(F("║  WARNING: Main watchdog timer DISABLED for testing purposes               ║"));
+  Serial.println(F("║  System will NOT automatically reset on hangs or crashes                  ║"));
+  Serial.println(F("╚════════════════════════════════════════════════════════════════════════════╝"));
+  Serial.println();
+  return; // Skip watchdog initialization
+#endif
+
   // Function `esp_task_wdt_init(const esp_task_wdt_config_t *config)` takes a pointer to a configuration struct,
   // but does not store that specific object's pointer. Therefore, it's safe to pass a pointer to a stack-allocated
   // struct here.
   esp_task_wdt_config_t wdtConfig = {
-      .timeout_ms = 300000, // 5 minutes, i.e. 300,000 milliseconds 
+      .timeout_ms = 30000, // 30 seconds - reduced from 5 minutes for faster recovery
       .trigger_panic = true,
   };
   esp_err_t wdtInitResult = esp_task_wdt_init(&wdtConfig);
@@ -649,12 +706,70 @@ void initWatchdogTimer() {
   } else {
     // Critical error: likely ESP_ERR_NO_MEM or other unexpected failure. Halt execution since watchdog is essential for long-term system stability.
     // ATTENTION: in this scenario, we haven't subscribed the main task to the watchdog yet, and the watchdog is reporting problems, so we cannot
-    // rely ("pet") reset the watchdog while halting, because this will likely just lead to a flood of console prints informing about the watchdog
+    // reliably ("pet") reset the watchdog while halting, because this will likely just lead to a flood of console prints informing about the watchdog
     // rejecting the resets.
     ErrorMessages::WatchdogInitError::build(ErrorMessages::errorBuffer, static_cast<int>(wdtInitResult));
     displayErrorAndHalt(String(ErrorMessages::getBuffer()), false); // will block indefinitely
   }
   enableLoopWDT(); // enable the watchdog to be reset automatically at the beginning of each `loop` iteration
+}
+
+/* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Heating Liveness Monitor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
+//
+// The heating liveness monitor is a secondary monitoring mechanism to ensure heating turns OFF in case we haven't
+// visited the the core logic comparing new temperature readings with the respective threshold values recently.
+// If no new temperature readings are available, we have bugs in temperature reading, or conditional logic errors,
+// the heating might remain on unintentionally.
+//
+// IMPORTANT: This Monitor does NOT protect against complete system hangs/crashes. If the system crashes, this
+// Heating Monitor won't execute either. Catching complete system hangs/crashess is the job of the main
+// watchdog (TWDT). However, the Heating Liveness Monitor provides a SHORTER timeout (3s vs 30s) and specifically
+// monitors for unexpected edge cases in the logic as while the system is still running.
+//
+// OPERATION:
+// • initHeatingLivenessMonitor() initializes the mechanism during setup
+// • checkHeatingLivenessMonitor() is called early in each loop iteration to verify timing
+// • resetHeatingLivenessMonitor() is called from within the heating control section (after temp processing)
+// • If the heating control section doesn't execute within this interval, the liveness monitor will
+//   force heating OFF and display an error.
+//
+void initHeatingLivenessMonitor() {
+  lastHeatingControlMicros = esp_timer_get_time();
+  heatingLivenessMonitorActive = true;
+  Serial.print(F("Heating liveness monitor initialized with "));
+  Serial.print(HEATING_LIVENESS_TIMEOUT_MICROS / 1000000LL);
+  Serial.println(F("s timeout."));
+}
+
+void resetHeatingLivenessMonitor(int64_t currentMicros) {
+  lastHeatingControlMicros = currentMicros;
+  debug_do([&]() {
+    Serial.print((currentMicros - startMicros) / 1000LL);
+    Serial.println(F("\tHeating liveness monitor reset"));
+  });
+}
+
+void checkHeatingLivenessMonitor(int64_t currentMicros) {
+  if (!heatingLivenessMonitorActive) return; // Liveness mechanism not yet activated
+
+  int64_t timeSinceLastControl = currentMicros - lastHeatingControlMicros;
+  if (timeSinceLastControl > HEATING_LIVENESS_TIMEOUT_MICROS) {
+    // CRITICAL: Heating control logic hasn't executed within the liveness timeout
+    // This is an unexpected condition: force heating OFF immediately
+    digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF);
+
+    // Disable the liveness monitor to prevent repeated triggering
+    heatingLivenessMonitorActive = false;
+
+    // Build error message using the error framework
+    int timeoutSeconds = static_cast<int>(timeSinceLastControl / 1000000LL);
+    ErrorMessages::HeatingLivenessMonitorError::build(ErrorMessages::errorBuffer, timeoutSeconds);
+
+    // Display error and halt (this will keep resetting the watchdog to maintain the error state for human observation)
+    // The resetWatchdog=true parameter ensures the system doesn't auto-reset during error display,
+    // allowing human intervention and observation of the error condition.
+    displayErrorAndHalt(String(ErrorMessages::getBuffer()), true);
+  }
 }
 
 /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Heap Monitor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
