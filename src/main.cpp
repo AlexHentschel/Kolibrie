@@ -28,10 +28,13 @@
 /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DEBUG Printing and logging ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
 // IMPORTANT: DEBUG must be defined BEFORE including `DebugUtils.h`, otherwise the preprocessor will
 // strip out the debug code when it processes the #if defined(DEBUG) directive inside debug_do().
-#include "DebugUtils.h"
 
 // DEBUG LOGS
-#define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+// #define DEBUG // extended behavior for debugging (e.g., Serial console output, delayed operations for observability, etc.)
+
+// CAUTION: Do NOT move the #include below above the #define DEBUG - order matters for preprocessor directives!
+// The #define must be visible when DebugUtils.h is processed, or all debug_do() calls will be compiled out.
+#include "DebugUtils.h"
 
 /* ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ System CONFIGURATION ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ */
 // Wifi credentials:
@@ -132,13 +135,13 @@ static LEDExpiringToggler extLoadToggler(EXT_LOAD_SWITCH, -1, 2000, LedUtils::HI
 // remain on unintentionally.
 //
 // IMPORTANT: This Monitor does NOT protect against complete system hangs/crashes. If the system crashes, this
-// Heating Monitor won't execute either. Catching complete system hangs/crashess is the job of the main
-// watchdog (TWDT). However, this Monitor provides a SHORTER timeout (3s vs 30s) and specifically monitors the critical
+// Heating Monitor won't execute either. Catching complete system hangs/crashes is the job of the main
+// watchdog (TWDT). However, this Monitor provides a SHORTER timeout (5s vs 30s) and specifically monitors the critical
 // heating section.
 //
 // LIVENESS TIMEOUT: If the heating control section doesn't execute within this interval,
 // the liveness monitor will force heating OFF and display an error.
-static constexpr int64_t HEATING_LIVENESS_TIMEOUT_MICROS = 3000000LL; // 3 seconds in microseconds
+static constexpr int64_t HEATING_LIVENESS_TIMEOUT_MICROS = 5000000LL; // 5 seconds in microseconds
 
 // Timestamp of the last time the heating control logic executed successfully
 static volatile int64_t lastHeatingControlMicros = 0;
@@ -326,14 +329,14 @@ void loop() {
       statDisplay.setHeatingStatus(true);
       debug_do([&]() {
         Serial.print((currentMicros - startMicros) / 1000LL);
-        Serial.println(F(" Turning Heating ON"));
+        Serial.println(F(" Setting Heating to ON"));
       });
     } else if (smoothedTemp > TEMP_LIMIT_HEATING_OFF) { // Temperature high enough: turn heating OFF
       digitalWrite(EXT_LOAD_SWITCH, EXT_LOAD_OFF);
       statDisplay.setHeatingStatus(false);
       debug_do([&]() {
         Serial.print((currentMicros - startMicros) / 1000LL);
-        Serial.println(F(" Turning Heating Off"));
+        Serial.println(F(" Setting Heating to OFF"));
       });
     }
 
@@ -787,8 +790,11 @@ void runHeapMonitor(int64_t currentMicros) {
   uint32_t minFreeHeap = ESP.getMinFreeHeap();
 
   Serial.println();
-  Serial.print((currentMicros - startMicros) / 1000LL);
-  Serial.print(F(" HEAP MONITOR:\n\t"));
+  debug_do([&]() {
+    Serial.print((currentMicros - startMicros) / 1000LL);
+    Serial.print(' ');
+  });
+  Serial.print(F("HEAP MONITOR:\n\t"));
   Serial.print(freeHeap);
   Serial.print(F(" bytes of currently free heap\n\t"));
   Serial.print(minFreeHeap);
