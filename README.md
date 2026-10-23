@@ -1,8 +1,8 @@
 # Project Kolibrie
 
-<p float="left">
-  <img src="docs/Circuit Diagram switching 110V AC.png" height="222" alt="Circuit diagram switching 110V AC" />
-  <img src="docs/IMG_4930.jpg" height="222" alt="Assembled hardware" />
+<p align="center">
+  <img src="docs/Circuit Diagram switching 110V AC.png" height="450" hspace="22" alt="Circuit diagram switching 110V AC" />
+  <img src="docs/IMG_4930.jpg" height="450" hspace="22" alt="Assembled hardware" />
 </p>
 
 This is the realization and extension of [Project Hummingbird](https://github.com/AlexHentschel/hummingbird). 
