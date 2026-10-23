@@ -38,6 +38,10 @@ void PrintLifeSign::activate(unsigned int delayMs /* = 0 */) {
   trigger_.activate(delayMs);
 }
 
+void PrintLifeSign::activate(int64_t currentMicros, unsigned int delayMs) {
+  trigger_.activate(currentMicros, delayMs);
+}
+
 void PrintLifeSign::expire() {
   trigger_.expire();
 }

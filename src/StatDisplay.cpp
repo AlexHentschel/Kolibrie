@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include <cmath> // for `std::round`
 
 #include "Display.h"
 #include "StatDisplay.h"
@@ -49,7 +50,7 @@ StatDisplay::StatDisplay(U8G2 &display, unsigned int heatingSymbolOnDurationMs, 
 }
 
 void StatDisplay::setTemp(float temp) {
-  if (!isfinite(temp)) {
+  if (!std::isfinite(temp)) {
     return; // Ignore invalid temperature values (NaN, Inf, -Inf)
   }
   int newTemp;
@@ -103,7 +104,7 @@ void StatDisplay::checkRedraw(int64_t currentMicros) {
     // for negative temperatures, use smaller font to accommodate minus sign
     display.setFont(u8g2_font_logisoso20_tn); // numbers-only font [ending "tn"]
     display.setCursor(0, 28);
-    display.print("-");
+    display.print('-');
     display.setCursor(11, 30);
     display.print(-t);
   }

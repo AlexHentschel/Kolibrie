@@ -9,7 +9,7 @@ namespace Display {
 
   // Service function: Print a single line of text on the OLED, left-aligned, with configurable text size and y-offset.
   // Returns the updated y-offset for printing the next line below, if desired.
-  // While this is different than the U8G2 convention (baseline of string), the yOffset for this unction denotes the
+  // While this is different than the U8G2 convention (baseline of string), the yOffset for this function denotes the
   // TOP position of the text block (top of a capital letter).
   //
   // CAUTION: does neither clear display nor send the buffer! Therefore, this function can be composed with other screen elements.

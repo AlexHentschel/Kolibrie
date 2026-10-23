@@ -3,21 +3,24 @@
 #include <esp_timer.h> // For esp_timer_get_time()
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ *
- *                                   CLASS LEDExpiringToggler                                     *
+ *                                  CLASS LEDExpiringToggler                                      *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 // This class toggles a GPIO Pin (uint8_t for ESP32 - style GPIOx) on and off throughout a specified `lifetimeMs` interval.
+// The LEDExpiringToggler supports asymmetric blinking patterns (e.g., short flash followed by longer pause), by
+// specifying separate durations for the ON and OFF states.
+//
 // Each time `activate()` is called, the time of the *latest* activation is remembered. Throughout the interval `lifetimeMs`
 // thereafter, the LED is allowed to be toggled between on and off. When exceeding the lifetime, the LED is turned off. To
-// produce human-visible blinking, a `toggleIntervalMs` specifies the number of milliseconds after which the output is
-// alternated between on <-> off.
+// produce human-visible blinking, `toggleDurationOnMs` and `toggleDurationOffMs` specify the number of milliseconds the
+// LED stays on and off, respectively.
 //
 // Internally, all time bookkeeping is done in microseconds for efficiency. All variables representing time
 // in microseconds have the suffix 'Micros'. Constructors and activate() take milliseconds as input (unsigned int, with 'Ms'
 // suffix) to reflect human-relevant time scales. The different units are also reflected by types:
 //   • `unsigned int` represents durations and delays in Milliseconds. Those can only be positive and allow
 //      value in the range 0 to 2^32 -1 milliseconds (quite precisely 49 days and 17 hours).
-//   •  for lifetime (and internally for bookkeeping), we use `int64_t` , which allows representing both
+//   •  for lifetime (and internal bookkeeping), we use `int64_t`, which allows representing both
 //      positive and negative times covering large operational time spans beyond 50 days.
 //
 // There are two checkToggleLED() functions:
@@ -28,11 +31,20 @@
 // This implementation is intended to run on the controller loop, consuming minimal resources. Results should be
 // largely deterministic across different controllers as we don't rely on CPU frequency.
 
-// constructor:
+// Constructor with separate on/off durations:
+LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned int toggleDurationOnMs, unsigned int toggleDurationOffMs, bool highIsOn)
+    : pin(pin),
+      highIsOn(highIsOn),
+      toggler(lifetimeMs, toggleDurationOnMs, toggleDurationOffMs) {
+  pinMode(pin, OUTPUT);
+  setLedOff_();
+}
+
+// Constructor with single interval (backward compatibility):
 LEDExpiringToggler::LEDExpiringToggler(uint8_t pin, int64_t lifetimeMs, unsigned int toggleIntervalMs, bool highIsOn)
     : pin(pin),
       highIsOn(highIsOn),
-      toggler(lifetimeMs, toggleIntervalMs) {
+      toggler(lifetimeMs, toggleIntervalMs, toggleIntervalMs) {
   pinMode(pin, OUTPUT);
   setLedOff_();
 }
@@ -63,7 +75,7 @@ void LEDExpiringToggler::toggleLED_() {
 void LEDExpiringToggler::activate(unsigned int delayMs /* = 0 */) {
   // Calling activate() itself leaves the LED off, but activates the LED toggling cycle (after specified delay).
   // The next call to `checkToggleLED()` (after `delayMs` milliseconds), will turn the LED on.
-  // This is exactly how the underlying FrequencyToggler works.
+  // This is exactly how the underlying FrequencyToggler2 works.
   toggler.activate(delayMs);
 }
 

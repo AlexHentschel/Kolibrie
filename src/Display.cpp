@@ -7,25 +7,25 @@
 static void selectFontForHeight(uint8_t textHeight, const uint8_t *&font, u8g2_uint_t &handTunedTightening, u8g2_uint_t &yPad) {
   yPad = 0;
   if (textHeight <= 12) {
-    font = u8g2_font_6x12_tr;
+    font = u8g2_font_6x12_tf;
     handTunedTightening = 2;
   } else if (textHeight <= 13) {
-    font = u8g2_font_6x13_tr;
+    font = u8g2_font_6x13_tf;
     handTunedTightening = 1;
   } else if (textHeight <= 14) {
-    font = u8g2_font_7x13_tr;
+    font = u8g2_font_7x13_tf;
     handTunedTightening = 1;
   } else if (textHeight <= 15) {
-    font = u8g2_font_8x13_tr;
+    font = u8g2_font_8x13_tf;
     handTunedTightening = 1;
   } else if (textHeight <= 16) {
-    font = u8g2_font_9x15_tr;
+    font = u8g2_font_9x15_tf;
     handTunedTightening = 1;
   } else if (textHeight <= 18) {
-    font = u8g2_font_9x18_tr;
+    font = u8g2_font_9x18_tf;
     handTunedTightening = 3;
   } else {
-    font = u8g2_font_10x20_tr;
+    font = u8g2_font_10x20_tf;
     handTunedTightening = 2;
   }
 }

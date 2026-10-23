@@ -49,7 +49,7 @@ LEDExpiringToggler *blueToggler = nullptr; // blinks 5 times turning 1 second
 
 /* Controller for External Load -> GPIO
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-// EXT_LOAD_SWITCH defines the GPIO that is used to controll an external load attached.
+// EXT_LOAD_SWITCH defines the GPIO that is used to control an external load attached.
 // EXT_LOAD_ON and EXT_LOAD_OFF define the states that correspond to the load being provided
 // power or not. Here, the micro-controller's GPIO (3.3V) controls the external load, but
 // through an IRL530 Power Mosfet, supplying 5V trigger to a Solid-State-Relay switching AC mains.
@@ -112,9 +112,7 @@ void setup() { /* ━━━━━━━━━━━━━━━━━━━━�
   Serial.println(F("Hello"));
 
   /* ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ DS18B20 Temperature Sensor ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ */
-  
-  
-  
+
   initTemperatureSensor();
   readTriggerTemperature = std::make_unique<FrequencyTrigger>(FrequencyUtils::unbounded_lifetime, 5000u); // read temperature every 5s, unbounded lifetime
 
@@ -241,7 +239,7 @@ void printDeviceAddress(const DeviceAddress address) {
  * which is expected to be the only device on the bus. We verify the device is a compatible temperature
  * sensor by checking its address family code.
  *
- * CAQUTION: this function reads and writes (intention: initialization) globally defined variables:
+ * CAUTION: this function reads and writes (intention: initialization) globally defined variables:
  *  • The sensor is initialized with the precision defined by the `TEMPERATURE_PRECISION` constant.
  *  • The address of the sensor is stored in the global variable `tempSensorDeviceAddress`.
  *
